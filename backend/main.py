@@ -98,44 +98,129 @@ def _prepare_features(prospect: ProspectInput) -> dict:
     return features
 
 
-def _build_prompt(prospect: ProspectInput, comps: list[dict]) -> str:
+def _build_prompt(prospect: ProspectInput, pca_vec) -> str:
     def _fmt(v, fmt=".1f", suffix=""):
         return f"{v:{fmt}}{suffix}" if v is not None else "N/A"
 
     def _pct(v):
         return f"{v * 100:.1f}%" if v is not None else "N/A"
 
-    def _comp_stats(s: dict) -> str:
-        parts = []
-        if s.get("p36_pts") is not None:
-            parts.append(f"{s['p36_pts']:.1f} pts")
-        if s.get("p36_reb") is not None:
-            parts.append(f"{s['p36_reb']:.1f} reb")
-        if s.get("p36_ast") is not None:
-            parts.append(f"{s['p36_ast']:.1f} ast")
-        if s.get("adv1_ts_pct") is not None:
-            parts.append(f"{s['adv1_ts_pct'] * 100:.1f}% TS")
-        return ", ".join(parts) if parts else "limited stats"
+    pc1, pc2, pc3, pc4, pc5, pc6 = (float(pca_vec[i]) for i in range(6))
+    pc9 = float(pca_vec[8])
 
-    comp_lines = "\n".join(
-        f"{i + 1}. {c['name']} ({c['draft_year']}, #{c['pick']}) — {_comp_stats(c['stats'])}"
-        for i, c in enumerate(comps)
-    )
+    has_combine = any(getattr(prospect, f) is not None for f in [
+        "combine_max_vertical", "combine_lane_agility",
+        "combine_shuttle", "combine_three_qtr_sprint",
+    ])
 
-    return f"""A prospect has entered the NBA draft with the following profile:
-- Position: {prospect.position or 'Unknown'}
-- Height: {ml.height_display(prospect.height_inches)}, Weight: {_fmt(prospect.weight, '.0f', ' lbs')}, Age: {_fmt(prospect.age_at_draft)}
-- Points/36: {_fmt(prospect.p36_pts)}, Rebounds/36: {_fmt(prospect.p36_reb)}, Assists/36: {_fmt(prospect.p36_ast)}
-- TS%: {_pct(prospect.adv1_ts_pct)}, USG%: {_pct(prospect.adv1_usg_pct)}, OBPM: {_fmt(prospect.adv2_obpm)}, DBPM: {_fmt(prospect.adv2_dbpm)}
-- Projected NBA 3P%: {_pct(prospect.adv1_proj_nba_3p)}
+    combine_note = "" if has_combine else \
+        "\n(No combine data for this prospect — PC5 is inferred from college stats only; treat with caution)"
 
-Their 3 closest historical draft comps are:
-{comp_lines}
+    combine_stats = ""
+    if has_combine:
+        combine_stats = (
+            f"\nCombine: Vertical={_fmt(prospect.combine_max_vertical, '.1f', '\"')} | "
+            f"Lane Agility={_fmt(prospect.combine_lane_agility, '.2f', 's')} | "
+            f"3/4 Sprint={_fmt(prospect.combine_three_qtr_sprint, '.2f', 's')} | "
+            f"Shuttle={_fmt(prospect.combine_shuttle, '.2f', 's')}"
+        )
 
-Respond in exactly this format with no extra text before or after:
-ANIMAL: <a single animal that captures this player's playing style (e.g. "SHARK", "HAWK", "BULL")>
-ARCHETYPE: <a 3-6 word archetype label (e.g. "PERIMETER SNIPER / OFF-BALL MENACE")>
-WRITEUP: <2-3 sentences: what these comps reveal about this prospect's archetype, strengths, and NBA projection. Be specific and analytical. No filler phrases.>"""
+    data_notes = []
+    if not has_combine:
+        data_notes.append("No combine data available — athletic scores (PC5) are inferred from college production only.")
+    if prospect.pg_g is not None and prospect.pg_g < 20:
+        data_notes.append(f"Small sample size ({int(prospect.pg_g)} games played) — treat all signals with caution.")
+    data_quality_note = " ".join(data_notes) if data_notes else "Full data set available. All signals are based on complete college stats."
+
+    return f"""You are an elite NBA draft analyst writing a concise scouting archetype profile. Your job is to translate statistical patterns into vivid, accurate basketball characterizations. You must be specific and grounded — no clichés, no hype.
+
+=== PCA TRAIT SCORES ===
+These scores come from a machine learning model trained on NBA draft prospects 2010-2025. Each component captures a distinct basketball dimension. Scores are standardized (mean=0, std=1). A score of +2.0 is elite. +1.0 is above average. 0.0 is league average. -1.0 is below average. -2.0 is notably weak.
+
+PC1 ({pc1:+.2f}) — SIZE & INTERIOR DOMINANCE  [26.5% of total variance — most important]
+High positive: Big, heavy, dominates rebounds and blocks, interior-oriented
+High negative: Smaller, perimeter-oriented, high 3-point attempt rate
+
+PC2 ({pc2:+.2f}) — OFFENSIVE STAR POWER  [14.6% of variance]
+High positive: Elite offensive producer — high PER, OBPM, win shares, scoring efficiency
+Low/negative: Role player production, limited offensive creation
+
+PC3 ({pc3:+.2f}) — TWO-WAY PLAYMAKING  [8.2% of variance]
+High positive: Playmaker and defender — high assists, steals, DBPM
+High negative: Off-ball specialist, limited creation or defensive activity
+
+PC4 ({pc4:+.2f}) — USAGE & VOLUME vs EFFICIENCY  [6.8% of variance]
+High positive: High-usage volume scorer, creates own shot, higher turnovers
+High negative: Low-usage, efficient role player, clean decision-making
+
+PC5 ({pc5:+.2f}) — ATHLETIC EXPLOSIVENESS  [5.8% of variance]
+High positive: Explosive vertical leap, elite jumping ability
+High negative: Slower sprint and agility scores (lower times = more explosive){combine_note}
+
+PC6 ({pc6:+.2f}) — LENGTH & MATURITY  [4.3% of variance]
+High positive: Exceptional wingspan relative to height, older/more seasoned prospect
+High negative: Shorter wingspan ratio, younger/rawer prospect
+
+PC9 ({pc9:+.2f}) — DURABILITY & AVAILABILITY  [3.1% of variance]
+High positive: Played a full season consistently, durable
+High negative: Limited games played — injury, eligibility, or small sample
+
+PC7, PC8, PC10-PC15: Not reliable enough to interpret — ignore these entirely.
+
+=== RAW STAT ANCHORS ===
+Use these to confirm or contradict the PCA signals above. Only reference a trait if BOTH the PCA score AND the raw stats support it.
+
+Height: {ml.height_display(prospect.height_inches)}  |  Weight: {_fmt(prospect.weight, '.0f', ' lbs')}  |  Age at Draft: {_fmt(prospect.age_at_draft)}
+Points/36: {_fmt(prospect.p36_pts)}  |  Rebounds/36: {_fmt(prospect.p36_reb)}  |  Assists/36: {_fmt(prospect.p36_ast)}
+Blocks/36: {_fmt(prospect.p36_blk)}  |  Steals/36: {_fmt(prospect.p36_stl)}  |  Turnovers/36: {_fmt(prospect.p36_to)}
+True Shooting%: {_pct(prospect.adv1_ts_pct)}  |  Usage%: {_pct(prospect.adv1_usg_pct)}
+OBPM: {_fmt(prospect.adv2_obpm)}  |  DBPM: {_fmt(prospect.adv2_dbpm)}
+Projected NBA 3P%: {_pct(prospect.adv1_proj_nba_3p)}{combine_stats}
+
+=== DATA QUALITY NOTE ===
+{data_quality_note}
+
+=== INSTRUCTIONS ===
+
+STEP 1 — CHOOSE AN ANIMAL
+Pick one animal that captures this player's complete basketball archetype — strengths AND limitations. The animal must feel inevitable, not forced. Ask yourself: if this player were an animal in the wild, what would they be?
+
+Rules for the animal:
+- Must be a real animal (no mythological creatures)
+- Should capture the dominant PC1/PC2 traits primarily
+- Should also hint at their limitations — not just their strengths
+- A panther is all upside. A hyena is scrappy and effective but ugly. A wolf is a pack hunter. A gazelle is fast but fragile. Be honest.
+- Avoid the most clichéd picks (lion, eagle, shark) unless truly perfect
+- If no PC score exceeds ±1.0, the player has no standout trait — choose an animal that reflects statistical anonymity honestly
+
+STEP 2 — WRITE THE ARCHETYPE LABEL
+3-5 words capturing their basketball identity.
+Examples: "Explosive Two-Way Playmaker", "Efficient Interior Anchor", "High-Usage Perimeter Creator", "Raw Athletic Upside Project"
+If no PC score exceeds ±1.0, the label should reflect that (e.g. "Statistically Unremarkable Role Candidate")
+
+STEP 3 — WRITE THE SCOUTING PROFILE
+Exactly 3-4 sentences following this structure:
+
+Sentence 1: Introduce the animal and core identity. Format: "This player is a [animal] — [one vivid phrase]." The phrase should capture their essence in basketball terms.
+Sentence 2: Primary strength. Ground this in the highest absolute PC score confirmed by raw stats. Be specific — name the actual skill.
+Sentence 3: Secondary trait or how they create value. Reference the animal naturally here.
+Sentence 4: Core limitation. Ground this in their most negative PC score confirmed by raw stats. Be honest.
+
+If no score exceeds ±1.0: skip the normal structure. Write 2 sentences acknowledging that the data shows no dominant trait, and what that means for their NBA projection.
+
+RULES:
+- Under 90 words total for the writeup
+- Never mention PCA scores directly — translate into basketball language
+- Never use these words: motor, IQ, upside, intangibles, tools, high-ceiling, work ethic, coachable
+- Reference the animal 2-3 times total across all sentences naturally
+- Only mention traits supported by BOTH PCA scores AND raw stats
+- Be specific and analytical, not hype or generic
+
+=== OUTPUT FORMAT ===
+Output exactly this structure, nothing else before or after:
+ANIMAL: [animal name in ALL CAPS]
+ARCHETYPE: [3-5 word label in Title Case]
+WRITEUP: [your 3-4 sentences, under 90 words]"""
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -197,10 +282,7 @@ async def stream_blurb(prospect: ProspectInput):
 
     features = _prepare_features(prospect)
     pca_vec, _ = ml.transform_prospect(features)
-    top_idx, _ = ml.find_similar(pca_vec, n=3)
-
-    comps = [ml.player_to_dict(ml.state.df.iloc[int(idx)]) for idx in top_idx]
-    prompt = _build_prompt(prospect, comps)
+    prompt = _build_prompt(prospect, pca_vec)
 
     async def generate():
         try:

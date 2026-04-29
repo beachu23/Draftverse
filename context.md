@@ -89,19 +89,23 @@ gets a Gemini-generated animal archetype + scouting writeup.
 - No database, no ORM, no migrations
 
 ### Gemini Model
-- `gemini-2.5-flash` — confirmed working, 5 RPM / 20 RPD free tier
-  (RPM is the binding limit during development — space calls out)
+- `gemini-2.5-flash` — live prospect calls only (not batch players)
 - SDK: `google-genai` (current), NOT deprecated `google-generativeai`
-- Streaming pattern:
+- Streaming pattern — NOTE: no `await` before the async generator:
 ```python
 async def generate():
     client = genai.Client(api_key=api_key)
-    async for chunk in await client.aio.models.generate_content_stream(
+    async for chunk in client.aio.models.generate_content_stream(
         model="gemini-2.5-flash", contents=prompt):
         if chunk.text:
             yield chunk.text
 return StreamingResponse(generate(), media_type="text/plain")
 ```
+
+### GPT-4o-mini (batch only)
+- Used in `generate_archetypes.py` to precompute all 462 player archetypes
+- Same prompt as Gemini live call — model-agnostic prompt format
+- Add `OPENAI_API_KEY` to `.env` before running the batch script
 
 ### Hosting
 - **Railway** — FastAPI backend (env var: GEMINI_API_KEY)
@@ -196,16 +200,14 @@ based on their PCA scores + raw stats. This is the primary identity shown
 in player bubbles — more prominent than name/position.
 
 ### Two flows:
-1. **Existing players (462)** — PRECOMPUTED. Run batch script once using
-   ChatGPT or Gemini, store in `player_archetypes.json`. No API calls at
-   runtime. Served statically from backend.
+1. **Existing players (462)** — PRECOMPUTED. Run `generate_archetypes.py`
+   once with GPT-4o-mini, stores to `player_archetypes.json`. No API calls
+   at runtime. Served statically from backend via `/players` response.
 
-2. **New prospect input** — LIVE Gemini call. Streams into the prospect
-   bubble in real time as the camera animation finishes. Writeup ends with
-   one factual sentence naming the 3 comps:
-   "His closest historical comparisons are [Comp1], [Comp2], and [Comp3]."
-   This sentence is included in the Gemini prompt so it writes it naturally
-   as the final sentence of the writeup.
+2. **New prospect input** — LIVE Gemini call via `/similarity/blurb`.
+   Streams into the prospect bubble in real time as the arrangement view
+   activates. Uses PCA scores + raw stats — NOT comp names. The model
+   derives the archetype purely from the ML signal.
 
 ### Output format (strict — must be parseable):
 ```
@@ -241,10 +243,14 @@ def name_to_slug(raw):
 ```
 NOTE: Add player_slug back to ID_COLS in prepare_data.py for future runs.
 
-### Prompt file: scouting_prompt.py
-Contains `GEMINI_PROMPT_TEMPLATE` and `build_scouting_prompt(player)` function.
-Uses real PCA loadings with variance percentages. Handles limited_data flag.
-~1,255 tokens per call. Test with ChatGPT before batch processing all 462.
+### Prompt location
+The prompt lives in two places (identical logic):
+- `backend/main.py` → `_build_prompt(prospect, pca_vec)` — used for live Gemini calls
+- `generate_archetypes.py` → `build_prompt(row, pca_vec)` — used for batch GPT-4o-mini
+
+Both use PCA scores (PC1–PC6, PC9) + raw stats. Combine note is conditional.
+~1,200 tokens per call. Weak-signal case handled: if no PC exceeds ±1.0,
+model instructed to acknowledge statistical anonymity rather than fabricate.
 
 ---
 
@@ -419,14 +425,13 @@ player_slug: NOT in players_umap_3d.csv — derive using name_to_slug() in scout
 
 ## Outstanding TODOs (in order)
 
-1. **Camera animation** — GSAP snake through universe, land on prospect
-2. **Player bubbles** — PlayerBubble.jsx with animal/archetype/stats/writeup
-3. **Gemini streaming bubble** — GeminiBubble.jsx, prospect only, streams live
-4. **Click to explore** — clicking any star calls GET /players/{slug}/similar,
+1. ~~**Camera animation**~~ ✅ GSAP CatmullRomCurve3 fly-in, then WASD nav
+2. ~~**Player bubbles**~~ ✅ Embedded in Universe.jsx — prospect stats bubble in arrangement view
+3. ~~**Gemini streaming bubble**~~ ✅ Streams ANIMAL/ARCHETYPE/WRITEUP into prospect bubble; PCA-based prompt
+4. **Run batch script** — `python generate_archetypes.py` (add OPENAI_API_KEY to .env first)
+5. **Update /players endpoint** — load player_archetypes.json at startup, include archetype in each player dict
+6. **Click to explore** — clicking any star calls GET /players/{slug}/similar,
    shows precomputed archetype bubble + their 3 nearest neighbors illuminate
-5. **Search again button** — unobtrusive, returns to form
-6. **Batch precompute archetypes** — run scouting_prompt.py on all 462 players
-   using ChatGPT, save to player_archetypes.json
-7. **Update /players endpoint** — include archetype from player_archetypes.json
+7. **Search again button** — unobtrusive, returns to form
 8. **Add player_slug to ID_COLS in prepare_data.py** — for future pipeline runs
 9. **Deploy** — Railway (backend) + Vercel (frontend)
