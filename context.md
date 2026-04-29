@@ -43,9 +43,26 @@ gets a Gemini-generated animal archetype + scouting writeup.
 
 ## Key Design Decisions
 
-- **All player sprites same color** — soft white/blue tint (#aaccff).
-  Only the prospect is distinct: gold (#ffd700), scale 16 vs 10 for others.
-- **No position color coding** — keeps the space aesthetic clean.
+- **Visual theme: arcade pixel-art** — the universe looks like a retro arcade
+  game (Space Invaders / Galaga aesthetic), not a realistic galaxy. Hard pixel
+  borders, pure black void background, phosphor-CRT bloom, no soft gradients
+  or nebula. This is the direction going forward — do not revert to a realistic
+  space aesthetic.
+- **Field star sprites** — pixel-art 4-point stars drawn pixel-by-pixel on a
+  32×32 canvas (`imageSmoothingEnabled = false`). Five blue/cyan palette
+  variants with hard 1px dark outlines. Each star has a slow staggered ambient
+  blink (1.8–5s period, square-wave opacity).
+- **Prospect sprite** — pixel-art 8-point star (cardinal + diagonal arms),
+  gold (#ffdd00) fill, dark amber outline. Slowly rotates (`material.rotation`)
+  and scale-snaps between 26 and 32 every 0.5s after camera lands (discrete
+  arcade power-up pulse). Gold particle ring orbits it.
+- **Comp sprites** — same 4-point shape as field stars but orange (#ff7700)
+  fill with white outline. Scale 18. Blink in sync at 0.45s period, full
+  on/off — alert cadence vs the slow ambient field blink.
+- **No position color coding** — keeps the arcade aesthetic clean.
+- **Navigation: WASD + mouse-drag** — not OrbitControls. After camera fly-in
+  completes, user navigates freely with WASD + scroll wheel + click-drag to
+  look around.
 - **Loading = the form** — Three.js initializes after /players fetch completes,
   not on page load. No spinner needed.
 - **Similarity in PCA space, NEVER UMAP space** — UMAP distorts distances.
@@ -297,26 +314,31 @@ Any missing fields imputed server-side with stored training medians.
 
 ## Three.js Scene (CURRENT STATE — working)
 
-- 462 players as THREE.Sprite with radial gradient canvas texture
-- All same color: #aaccff (soft white-blue)
-- Positioned at (umap_x - meanX) * 100, (umap_y - meanY) * 100, (umap_z - meanZ) * 100
-- Scale 10 units each
-- Background: 2000 THREE.Points stars in 2000-unit cube (#ffffff, size 1.5)
-- OrbitControls with damping enabled, target (0,0,0)
-- Black background (#000000)
-- Window resize handled
+- **Renderer**: `antialias: false` (keeps pixel edges sharp), ACESFilmic tone
+  mapping, exposure 1.1
+- **Post-processing**: UnrealBloomPass (strength 1.2, radius 0.3, threshold
+  0.55) — tight phosphor-CRT bloom on bright pixel centers only
+- **Background**: pure `#000000`, no fog, no nebula sphere
+- **Player sprites**: 462 THREE.Sprite, pixel-art 4-point stars, 5 blue/cyan
+  variants, scale 7–14, AdditiveBlending. Z-axis scaled ×150 vs ×100 for X/Y
+  (compensates for UMAP z-axis flatness)
+- **Background points**: 3000 THREE.Points, color #aaccff, size 0.9, opacity 0.45
+- **Ambient blink**: every field star has a random period (1.8–5s) and phase;
+  square-wave opacity flip in animate loop
+- **Navigation**: WASD + mouse-drag look + scroll-wheel glide. Idle cinematic
+  drift (Lissajous path) before form submit. Camera fly-in via GSAP
+  CatmullRomCurve3 on prospect submit, then WASD unlocks.
+- **Camera bug fix**: final camera position derived from centroid−prospect
+  direction so prospect is always in frame regardless of UMAP position
 
-### Prospect sprite (to be added after similarity search):
-```javascript
-// Gold sprite, scale 16, positioned at prospect's umap coords * 100
-// See placeholder comment in Universe.jsx
-color: 0xffd700, scale: (16, 16, 1)
-```
+### Prospect markers (added after similarity search):
+- 8-point gold pixel-art star sprite, scale 26→32 snap pulse, slow rotation
+- 160-particle gold ring (THREE.Points) orbiting the prospect position
 
-### Camera animation (NOT YET BUILT):
-1. GSAP tween from current position through 3-4 waypoints
-2. Decelerate and land at prospect's 3D position
-3. Trigger bubble appearance on arrival
+### Comp markers (added after fly-in completes):
+- Existing player sprites swapped to orange (#ff7700) pixel-art texture
+  with white outline, scale 18
+- Blink overridden to 0.45s period, in-sync, full on/off
 
 ---
 

@@ -132,7 +132,10 @@ def _build_prompt(prospect: ProspectInput, comps: list[dict]) -> str:
 Their 3 closest historical draft comps are:
 {comp_lines}
 
-In 2-3 sentences, explain what these comps reveal about this prospect's archetype, strengths, and what kind of NBA player they project to be. Be specific and analytical, not generic. Do not use filler phrases."""
+Respond in exactly this format with no extra text before or after:
+ANIMAL: <a single animal that captures this player's playing style (e.g. "SHARK", "HAWK", "BULL")>
+ARCHETYPE: <a 3-6 word archetype label (e.g. "PERIMETER SNIPER / OFF-BALL MENACE")>
+WRITEUP: <2-3 sentences: what these comps reveal about this prospect's archetype, strengths, and NBA projection. Be specific and analytical. No filler phrases.>"""
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -202,13 +205,13 @@ async def stream_blurb(prospect: ProspectInput):
     async def generate():
         try:
             client = genai.Client(api_key=api_key)
-            async for chunk in await client.aio.models.generate_content_stream(
+            async for chunk in client.aio.models.generate_content_stream(
                 model="gemini-2.5-flash",
                 contents=prompt,
             ):
                 if chunk.text:
                     yield chunk.text
         except Exception as e:
-            yield f"[ERROR: {e}]"
+            yield f"[GEMINI_ERROR: {e}]"
 
     return StreamingResponse(generate(), media_type="text/plain")
