@@ -138,6 +138,7 @@ export default function Universe({ players, visible, prospectData }) {
   const compSpritesRef       = useRef([])
   const savedNavRef          = useRef(null)
   const arrangementLockedRef = useRef(false)
+  const arrangeLookAtRef     = useRef(null)
 
   const keysRef = useRef(new Set())
   const navRef  = useRef({
@@ -157,6 +158,18 @@ export default function Universe({ players, visible, prospectData }) {
 
   // Derive parsed scouting data every render (cheap pure fn)
   const scout = parseScout(scoutingText)
+
+  // Limited data warning — < 60% of feature fields filled
+  const FEATURE_FIELDS = [
+    'height_inches','weight','age_at_draft',
+    'combine_max_vertical','combine_lane_agility','combine_shuttle','combine_three_qtr_sprint','combine_wingspan_inches',
+    'pg_g','pg_mp','pg_fg_pct','pg_ft_pct',
+    'p36_pts','p36_reb','p36_ast','p36_blk','p36_stl','p36_to','p36_pf',
+    'adv1_ts_pct','adv1_3pa_rate','adv1_fta_rate','adv1_proj_nba_3p','adv1_usg_pct','adv1_ast_usg','adv1_ast_to',
+    'adv2_per','adv2_ows_40','adv2_dws_40','adv2_obpm','adv2_dbpm',
+  ]
+  const filledCount   = FEATURE_FIELDS.filter(f => prospectData?.[f] != null && prospectData?.[f] !== '').length
+  const limitedData   = filledCount < Math.ceil(FEATURE_FIELDS.length * 0.6)
 
   // ── Arcade font injection ─────────────────────────────────────────────────
   useEffect(() => {
@@ -596,16 +609,16 @@ export default function Universe({ players, visible, prospectData }) {
               const halfW     = halfH * (mount.clientWidth / mount.clientHeight)
 
               const compTargets = [
-                prospectPos.clone().addScaledVector(camUp,    halfH * 0.55),
-                prospectPos.clone().addScaledVector(camRight, -halfW * 0.42).addScaledVector(camUp, -halfH * 0.38),
-                prospectPos.clone().addScaledVector(camRight,  halfW * 0.42).addScaledVector(camUp, -halfH * 0.38),
+                prospectPos.clone().addScaledVector(camUp, -halfH * 0.68),                                          // bottom
+                prospectPos.clone().addScaledVector(camRight,  halfW * 0.22).addScaledVector(camUp, halfH * 0.72), // significantly higher, slightly right
+                prospectPos.clone().addScaledVector(camRight,  halfW * 0.55).addScaledVector(camUp, halfH * 0.06), // slightly down, slightly more right
               ]
 
               gsap.to(camera.position, {
                 x: newCamPos.x, y: newCamPos.y, z: newCamPos.z,
                 duration: 1.4, ease: 'power2.inOut',
                 onUpdate:  () => camera.lookAt(prospectPos),
-                onComplete: () => camera.lookAt(prospectPos),
+                onComplete: () => { camera.lookAt(prospectPos); camera.updateMatrixWorld(true) },
               })
 
               compSprites.forEach((sprite, i) => {
@@ -689,16 +702,18 @@ export default function Universe({ players, visible, prospectData }) {
           {/* ── Prospect bubble ── */}
           {prospectBubble && (
             <div style={{
-              position: 'absolute', left: '50%', top: '50%',
-              transform: 'translate(-50%, 52px)',
+              position: 'absolute', left: '24px', top: '24px',
+              maxHeight: 'calc(100vh - 48px)',
+              overflowY: 'auto',
               background: 'rgba(0, 4, 18, 0.96)',
               border: '2px solid #3a8fff',
               boxShadow: '4px 4px 0 #001040, 0 0 28px rgba(58,143,255,0.3)',
               padding: '16px 20px',
-              minWidth: '240px',
+              width: '260px',
               fontFamily: FONT,
               lineHeight: 2.2,
               userSelect: 'none',
+              pointerEvents: 'auto',
             }}>
               <div style={{ color: '#ffdd00', fontSize: '10px', marginBottom: '14px', letterSpacing: '1px' }}>
                 ★&nbsp;PROSPECT&nbsp;★
@@ -740,7 +755,7 @@ export default function Universe({ players, visible, prospectData }) {
                     SCOUTING REPORT
                     <div style={{ color: '#445577', marginTop: '6px' }}>
                       {scoutingLoading
-                        ? '■ ■ ■'
+                        ? 'Generating..'
                         : scoutingText
                           ? <span style={{ color: '#ff4444', fontSize: '5px', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>{scoutingText}</span>
                           : 'SIGNAL LOST.'}
@@ -751,12 +766,26 @@ export default function Universe({ players, visible, prospectData }) {
             </div>
           )}
 
+          {/* ── Limited data warning ── */}
+          {limitedData && (
+            <div style={{
+              position: 'absolute', left: '24px', bottom: '24px',
+              fontFamily: FONT,
+              fontSize: '7px',
+              color: '#ff4444',
+              textShadow: '0 0 10px rgba(255,68,68,0.7)',
+              letterSpacing: '0.5px',
+              pointerEvents: 'none',
+            }}>
+              WARNING: LIMITED DATA
+            </div>
+          )}
+
           {/* ── Continue to explore button ── */}
           <button
             onClick={handleContinueExplore}
             style={{
-              position: 'absolute', right: '32px', top: '50%',
-              transform: 'translateY(-50%)',
+              position: 'absolute', right: '32px', bottom: '32px',
               pointerEvents: 'auto',
               background: 'rgba(0, 4, 18, 0.96)',
               border: '2px solid #3a8fff',
@@ -764,12 +793,10 @@ export default function Universe({ players, visible, prospectData }) {
               color: '#3a8fff',
               fontFamily: FONT,
               fontSize: '7px',
-              padding: '18px 14px',
+              padding: '14px 20px',
               cursor: 'pointer',
               letterSpacing: '1px',
-              lineHeight: 2.4,
-              writingMode: 'vertical-rl',
-              textOrientation: 'mixed',
+              lineHeight: 2.0,
               transition: 'color 0.15s, box-shadow 0.15s',
             }}
             onMouseEnter={e => {

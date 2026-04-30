@@ -1,0 +1,20 @@
+name: draftverse
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.13
+  - numpy=2.4.4
+  - pandas=3.0.2
+  - scikit-learn=1.8.0
+  - numba=0.65.1
+  - scipy
+  - pip
+  - pip:
+      - fastapi==0.136.1
+      - "uvicorn[standard]==0.46.0"
+      - umap-learn==0.5.12
+      - pydantic==2.13.2
+      - google-genai==1.73.1
+      - anthropic==0.97.0
+      - python-dotenv>=1.0.0

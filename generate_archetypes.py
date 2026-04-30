@@ -1,27 +1,31 @@
 #!/usr/bin/env python3
 """
 Batch-generate animal archetype scouting profiles for all 462 players.
-Uses GPT-4o-mini. Saves incrementally to player_archetypes.json.
+Uses Claude Haiku 4.5. Saves incrementally to player_archetypes.json.
 Resume-safe: skips players already in the JSON.
 
 Setup:
-  pip install openai python-dotenv pandas numpy
-  Add OPENAI_API_KEY to .env
+  pip install anthropic python-dotenv pandas numpy
+  Add ANTHROPIC_API_KEY to .env
 
 Usage:
   python generate_archetypes.py
 """
 
+import argparse
 import json
 import os
 import re
+import sys
 import time
 from pathlib import Path
+
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
-from openai import OpenAI
+import anthropic
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -37,7 +41,7 @@ pca_cols = sorted(
 )
 pca_matrix = df[pca_cols].values
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -159,32 +163,30 @@ Projected NBA 3P%: {_pct(_get(row, 'adv1_proj_nba_3p'))}{combine_stats}
 === INSTRUCTIONS ===
 
 STEP 1 — CHOOSE AN ANIMAL
-Pick one animal that captures this player's complete basketball archetype — strengths AND limitations. The animal must feel inevitable, not forced.
+Pick one animal that captures this player's complete basketball archetype. The animal must feel inevitable, not forced.
 
 Rules:
 - Must be a real animal (no mythological creatures)
-- Capture the dominant PC1/PC2 traits primarily; hint at limitations too
+- Capture the dominant PC1/PC2 traits primarily
 - A panther is all upside. A hyena is scrappy but ugly. A wolf is a pack hunter. A gazelle is fast but fragile. Be honest.
 - Avoid the most clichéd picks (lion, eagle, shark) unless truly perfect
-- If no PC score exceeds ±1.0, choose an animal that reflects statistical anonymity honestly
+- For high-PC1 (interior/big) players, differentiate within the tier — a hippo is an immovable physical presence, a bear is powerful but mobile, a moose is tall and awkward-athletic, a rhino charges through contact, an ox is a tireless workhorse, a bison is a bruising force. Don't default to the same animal for every big.
 
 STEP 2 — WRITE THE ARCHETYPE LABEL
 3-5 words capturing their basketball identity.
-If no PC score exceeds ±1.0, reflect that (e.g. "Statistically Unremarkable Role Candidate")
+Do not default to "High-Volume" as a descriptor unless usage is genuinely the most defining trait — describe basketball identity, not workload.
 
 STEP 3 — WRITE THE SCOUTING PROFILE
-Exactly 3-4 sentences:
-Sentence 1: "This player is a [animal] — [one vivid phrase]."
-Sentence 2: Primary strength, grounded in highest absolute PC score confirmed by raw stats.
-Sentence 3: Secondary trait. Reference the animal naturally.
-Sentence 4: Core limitation, grounded in most negative PC score confirmed by raw stats.
 
-If no score exceeds ±1.0: 2 sentences only, acknowledge no dominant trait.
+Exactly 4 sentences:
+Sentence 1: "This player is a [animal] — [one vivid phrase]." The phrase must capture their basketball essence in specific terms.
+Sentence 2: Primary strength, grounded in the highest absolute PC score confirmed by raw stats. Be specific — name the actual skill.
+Sentence 3: Secondary trait or how they create value. Reference the animal naturally here.
+Sentence 4: If the data shows a clear weakness (a PC score below -0.6 confirmed by raw stats), name it honestly. If no meaningful weakness is evident, end with a forward-looking statement about what this animal needs to prove at the next level — specific, not generic.
 
 RULES:
 - Under 90 words total for the writeup
 - Never mention PCA scores directly — translate into basketball language
-- Never use these words: motor, IQ, upside, intangibles, tools, high-ceiling, work ethic, coachable
 - Reference the animal 2-3 times naturally across all sentences
 - Only mention traits confirmed by BOTH PCA and raw stats
 - Be specific and analytical, not hype or generic
@@ -193,24 +195,23 @@ RULES:
 Output exactly this structure, nothing else before or after:
 ANIMAL: [ANIMAL NAME IN ALL CAPS]
 ARCHETYPE: [3-5 Word Label In Title Case]
-WRITEUP: [3-4 sentences, under 90 words]"""
+WRITEUP: [4 sentences, under 90 words]"""
 
 
 # ── GPT call with retry ───────────────────────────────────────────────────────
 
-def call_gpt(prompt: str, max_retries: int = 3) -> str | None:
+def call_claude(prompt: str, max_retries: int = 3) -> str | None:
     for attempt in range(max_retries):
         try:
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
                 max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
             )
-            return resp.choices[0].message.content
+            return msg.content[0].text
         except Exception as e:
             wait = 2 ** attempt
-            print(f"  ⚠ API error (attempt {attempt+1}/{max_retries}): {e} — retrying in {wait}s")
+            print(f"  ! API error (attempt {attempt+1}/{max_retries}): {e} - retrying in {wait}s")
             time.sleep(wait)
     return None
 
@@ -228,13 +229,54 @@ def parse_response(text: str) -> dict | None:
     }
 
 
+# ── Default test players (covers big men, guards, wings, role players) ─────────
+
+DEFAULT_TEST_NAMES = [
+    "Joel Embiid",       # dominant big, high PC1
+    "DeMarcus Cousins",  # interior scorer, force of nature
+    "Kyrie Irving",      # elite perimeter star
+    "John Wall",         # playmaking guard
+    "Kawhi Leonard",     # two-way wing
+    "Klay Thompson",     # off-ball shooter
+    "Cole Aldrich",      # borderline role player, neutral profile
+    "Cooper Flagg",      # recent top prospect
+]
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--test", action="store_true",
+                        help="Run on a small sample only — prints results, does not save")
+    parser.add_argument("--names", type=str, default=None,
+                        help='Comma-separated player names for --test, e.g. "John Wall,Joel Embiid"')
+    args = parser.parse_args()
+
+    if args.test:
+        test_names = [n.strip() for n in args.names.split(",")] if args.names else DEFAULT_TEST_NAMES
+        test_names_lower = [n.lower() for n in test_names]
+        rows = [(idx, row) for idx, row in df.iterrows()
+                if str(row["name"]).split("|")[0].strip().rsplit(" ", 1)[0].lower() in test_names_lower]
+        print(f"TEST MODE — {len(rows)} players matched (results not saved)\n")
+        for idx, row in rows:
+            clean = str(row["name"]).split("|")[0].strip().rsplit(" ", 1)[0]
+            print(f"--- {clean} ---")
+            raw    = call_claude(build_prompt(row, pca_matrix[idx]))
+            parsed = parse_response(raw) if raw else None
+            if parsed:
+                print(f"ANIMAL:    {parsed['animal']}")
+                print(f"ARCHETYPE: {parsed['archetype']}")
+                print(f"WRITEUP:   {parsed['writeup']}")
+            else:
+                print(f"FAILED - {repr(raw[:80]) if raw else 'None'}")
+            print()
+        return
+
     if OUTPUT_FILE.exists():
         with open(OUTPUT_FILE) as f:
             archetypes = json.load(f)
-        print(f"Resuming — {len(archetypes)}/{len(df)} players already done.\n")
+        print(f"Resuming - {len(archetypes)}/{len(df)} players already done.\n")
     else:
         archetypes = {}
 
@@ -251,18 +293,18 @@ def main():
         clean = str(row["name"]).split("|")[0].strip().rsplit(" ", 1)[0]
         print(f"[{idx+1}/{total}] {clean}...", end=" ", flush=True)
 
-        raw    = call_gpt(build_prompt(row, pca_matrix[idx]))
+        raw    = call_claude(build_prompt(row, pca_matrix[idx]))
         parsed = parse_response(raw) if raw else None
 
         if parsed is None:
             snippet = repr(raw[:80]) if raw else "None"
-            print(f"FAILED — {snippet}")
+            print(f"FAILED - {snippet}")
             fail_count += 1
             continue
 
         archetypes[slug] = parsed
         new_count += 1
-        print(f"✓  {parsed['animal']} / {parsed['archetype']}")
+        print(f"OK {parsed['animal']} / {parsed['archetype']}")
 
         if new_count % 10 == 0:
             with open(OUTPUT_FILE, "w") as f:

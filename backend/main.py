@@ -10,6 +10,7 @@ Startup: loads CSV + pkl files once into memory via ml.load_all().
 Env vars: GEMINI_API_KEY (required for /blurb), CORS_ORIGINS (default "*"), DATA_DIR.
 """
 
+import inspect
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -183,30 +184,27 @@ Projected NBA 3P%: {_pct(prospect.adv1_proj_nba_3p)}{combine_stats}
 === INSTRUCTIONS ===
 
 STEP 1 — CHOOSE AN ANIMAL
-Pick one animal that captures this player's complete basketball archetype — strengths AND limitations. The animal must feel inevitable, not forced. Ask yourself: if this player were an animal in the wild, what would they be?
+Pick one animal that captures this player's complete basketball archetype. The animal must feel inevitable, not forced.
 
 Rules for the animal:
 - Must be a real animal (no mythological creatures)
 - Should capture the dominant PC1/PC2 traits primarily
-- Should also hint at their limitations — not just their strengths
 - A panther is all upside. A hyena is scrappy and effective but ugly. A wolf is a pack hunter. A gazelle is fast but fragile. Be honest.
 - Avoid the most clichéd picks (lion, eagle, shark) unless truly perfect
-- If no PC score exceeds ±1.0, the player has no standout trait — choose an animal that reflects statistical anonymity honestly
+- For high-PC1 (interior/big) players, differentiate within the tier — a hippo is an immovable physical presence, a bear is powerful but mobile, a moose is tall and awkward-athletic, a rhino charges through contact, an ox is a tireless workhorse, a bison is a bruising force. Don't default to the same animal for every big.
 
 STEP 2 — WRITE THE ARCHETYPE LABEL
 3-5 words capturing their basketball identity.
-Examples: "Explosive Two-Way Playmaker", "Efficient Interior Anchor", "High-Usage Perimeter Creator", "Raw Athletic Upside Project"
-If no PC score exceeds ±1.0, the label should reflect that (e.g. "Statistically Unremarkable Role Candidate")
+Examples: "Explosive Two-Way Playmaker", "Efficient Interior Anchor", "Perimeter Creator With Range", "Raw Athletic Upside Project"
+Do not default to "High-Volume" as a descriptor unless usage is genuinely the most defining trait — describe basketball identity, not workload.
 
 STEP 3 — WRITE THE SCOUTING PROFILE
-Exactly 3-4 sentences following this structure:
+Exactly 4 sentences:
 
-Sentence 1: Introduce the animal and core identity. Format: "This player is a [animal] — [one vivid phrase]." The phrase should capture their essence in basketball terms.
+Sentence 1: "This player is a [animal] — [one vivid phrase]." The phrase must capture their basketball essence in specific terms.
 Sentence 2: Primary strength. Ground this in the highest absolute PC score confirmed by raw stats. Be specific — name the actual skill.
 Sentence 3: Secondary trait or how they create value. Reference the animal naturally here.
-Sentence 4: Core limitation. Ground this in their most negative PC score confirmed by raw stats. Be honest.
-
-If no score exceeds ±1.0: skip the normal structure. Write 2 sentences acknowledging that the data shows no dominant trait, and what that means for their NBA projection.
+Sentence 4: If the data shows a clear weakness (a PC score below -0.6 confirmed by raw stats), name it honestly. If no meaningful weakness is evident, end with a forward-looking statement about what this animal needs to prove at the next level — specific, not generic.
 
 RULES:
 - Under 90 words total for the writeup
@@ -220,7 +218,7 @@ RULES:
 Output exactly this structure, nothing else before or after:
 ANIMAL: [animal name in ALL CAPS]
 ARCHETYPE: [3-5 word label in Title Case]
-WRITEUP: [your 3-4 sentences, under 90 words]"""
+WRITEUP: [your 3 sentences, under 110 words]"""
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -286,8 +284,8 @@ async def stream_blurb(prospect: ProspectInput):
 
     async def generate():
         try:
-            client = genai.Client(api_key=api_key)
-            async for chunk in client.aio.models.generate_content_stream(
+            gemini = genai.Client(api_key=api_key)
+            async for chunk in await gemini.aio.models.generate_content_stream(
                 model="gemini-2.5-flash",
                 contents=prompt,
             ):
