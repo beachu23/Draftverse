@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
@@ -114,6 +114,9 @@ const toKey = (raw) => {
 const fmtStat = v => (v != null && v !== '') ? (+v).toFixed(1) : '—'
 const fmtHt   = h => h ? `${Math.floor(h / 12)}' ${Math.round(h % 12)}"` : '—'
 
+const FONT = '"Press Start 2P", monospace'
+const fetchJSON = (url, opts) => fetch(url, opts).then(r => { if (!r.ok) throw new Error(r.status); return r.json() })
+
 function parseScout(text) {
   const animal    = text.match(/ANIMAL:\s*(.+?)(\n|$)/i)?.[1]?.trim()   ?? null
   const archetype = text.match(/ARCHETYPE:\s*(.+?)(\n|$)/i)?.[1]?.trim() ?? null
@@ -137,8 +140,11 @@ export default function Universe({ players, visible, prospectData }) {
   const bgStarsRef           = useRef(null)
   const compSpritesRef       = useRef([])
   const savedNavRef          = useRef(null)
-  const arrangementLockedRef = useRef(false)
-  const arrangeLookAtRef     = useRef(null)
+  const arrangementLockedRef  = useRef(false)
+  const playerDataMapRef      = useRef(new Map())   // sprite → full player object
+  const selectedSpriteRef     = useRef(null)
+  const selectedCompSpritesRef = useRef([])
+  const dragMovedRef          = useRef(false)
 
   const keysRef = useRef(new Set())
   const navRef  = useRef({
@@ -153,11 +159,12 @@ export default function Universe({ players, visible, prospectData }) {
   const [overlayFadeIn,     setOverlayFadeIn]     = useState(false)
   const [compLabelData,     setCompLabelData]     = useState([])
   const [prospectBubble,    setProspectBubble]    = useState(null)
+  const [selectedPlayer,    setSelectedPlayer]    = useState(null)   // { ...playerObj }
+  const [selectedComps,     setSelectedComps]     = useState([])
   const [scoutingText,      setScoutingText]      = useState('')
   const [scoutingLoading,   setScoutingLoading]   = useState(false)
 
-  // Derive parsed scouting data every render (cheap pure fn)
-  const scout = parseScout(scoutingText)
+  const scout = useMemo(() => parseScout(scoutingText), [scoutingText])
 
   // Limited data warning — < 60% of feature fields filled
   const FEATURE_FIELDS = [
@@ -295,8 +302,9 @@ export default function Universe({ players, visible, prospectData }) {
     const meanZ = zs.reduce((a, b) => a + b, 0) / zs.length
     meanRef.current = { x: meanX, y: meanY, z: meanZ }
 
-    const spritesMap = new Map()
-    const blinkStars = []
+    const spritesMap  = new Map()
+    const playerDataMap = new Map()
+    const blinkStars  = []
 
     players.forEach(player => {
       const variant = Math.floor(Math.random() * 5)
@@ -312,9 +320,10 @@ export default function Universe({ players, visible, prospectData }) {
       )
       const base = Math.random() < 0.8 ? 7 + Math.random() * 4 : 11 + Math.random() * 3
       sprite.scale.set(base, base, 1)
-      sprite.userData = { name: player.name }
+      sprite.userData = { name: player.name, baseScale: base }
       scene.add(sprite)
       spritesMap.set(toKey(player.name), sprite)
+      playerDataMap.set(sprite, player)
       blinkStars.push({
         sprite,
         phase:      Math.random() * Math.PI * 2,
@@ -324,8 +333,9 @@ export default function Universe({ players, visible, prospectData }) {
         opacityMul: 1,   // ← tweened during arrangement
       })
     })
-    spritesMapRef.current = spritesMap
-    blinkStarsRef.current = blinkStars
+    spritesMapRef.current   = spritesMap
+    playerDataMapRef.current = playerDataMap
+    blinkStarsRef.current   = blinkStars
 
     // Background stars
     const bgCount = 3000
@@ -356,12 +366,14 @@ export default function Universe({ players, visible, prospectData }) {
       navRef.current.dragging = true
       navRef.current.dragX = e.clientX
       navRef.current.dragY = e.clientY
+      dragMovedRef.current = false
       mount.style.cursor = 'grabbing'
     }
     function onMouseMove(e) {
       const nav = navRef.current
       if (!nav.active || !nav.dragging) return
       const dx = e.clientX - nav.dragX, dy = e.clientY - nav.dragY
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMovedRef.current = true
       nav.yaw   -= dx * 0.0025
       nav.pitch -= dy * 0.0025
       nav.pitch  = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, nav.pitch))
@@ -376,12 +388,82 @@ export default function Universe({ players, visible, prospectData }) {
       if (!navRef.current.active) return
       navRef.current.scrollVel = Math.max(-25, Math.min(25, navRef.current.scrollVel + e.deltaY * -0.12))
     }
+    function onClick(e) {
+      if (!navRef.current.active) return
+      if (dragMovedRef.current) return
+
+      const rect = mount.getBoundingClientRect()
+      const x = ((e.clientX - rect.left) / rect.width)  * 2 - 1
+      const y = -((e.clientY - rect.top)  / rect.height) * 2 + 1
+
+      const raycaster = new THREE.Raycaster()
+      raycaster.setFromCamera(new THREE.Vector2(x, y), camera)
+      const allSprites = [...spritesMapRef.current.values()]
+      const intersects = raycaster.intersectObjects(allSprites)
+
+      function clearSelection() {
+        if (selectedSpriteRef.current) {
+          const bs = selectedSpriteRef.current.userData.baseScale || 10
+          selectedSpriteRef.current.material.color.setHex(0xffffff)
+          gsap.to(selectedSpriteRef.current.scale, { x: bs, y: bs, duration: 0.2 })
+          selectedSpriteRef.current = null
+        }
+        selectedCompSpritesRef.current.forEach(sprite => {
+          const bs = sprite.userData.baseScale || 10
+          sprite.material.color.setHex(0xffffff)
+          gsap.to(sprite.scale, { x: bs, y: bs, duration: 0.2 })
+        })
+        selectedCompSpritesRef.current = []
+      }
+
+      if (intersects.length === 0) {
+        clearSelection()
+        setSelectedPlayer(null)
+        setSelectedComps([])
+        return
+      }
+
+      const hit = intersects[0].object
+      const playerData = playerDataMapRef.current.get(hit)
+      if (!playerData) { clearSelection(); setSelectedPlayer(null); setSelectedComps([]); return }
+
+      if (selectedSpriteRef.current === hit) {
+        clearSelection()
+        setSelectedPlayer(null)
+        setSelectedComps([])
+        return
+      }
+
+      clearSelection()
+      hit.material.color.setHex(0xffdd00)
+      gsap.to(hit.scale, { x: 22, y: 22, duration: 0.2 })
+      selectedSpriteRef.current = hit
+      setSelectedPlayer(playerData)
+      setSelectedComps([])
+
+      const slug = playerData.name.toLowerCase().replace(/ /g, '-').replace(/'/g, '')
+      fetchJSON(`http://localhost:8000/players/${encodeURIComponent(slug)}/similar`)
+        .then(d => {
+          const compSprites = d.similar
+            .map(c => spritesMapRef.current.get(toKey(c.name)))
+            .filter(Boolean)
+          compSprites.forEach(sprite => {
+            sprite.material.color.setHex(0xff7700)
+            gsap.to(sprite.scale, { x: 16, y: 16, duration: 0.2 })
+          })
+          selectedCompSpritesRef.current = compSprites
+          setSelectedComps(d.similar)
+        })
+        .catch(err => console.error('Similar fetch failed:', err))
+    }
+
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
     mount.addEventListener('mousedown', onMouseDown)
     mount.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mouseup', onMouseUp)
     mount.addEventListener('wheel', onWheel, { passive: false })
+    mount.addEventListener('click', onClick)
 
     function onResize() {
       const w = mount.clientWidth, h = mount.clientHeight
@@ -461,6 +543,7 @@ export default function Universe({ players, visible, prospectData }) {
       mount.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
       mount.removeEventListener('wheel', onWheel)
+      mount.removeEventListener('click', onClick)
       window.removeEventListener('resize', onResize)
       scene.traverse(obj => {
         obj.geometry?.dispose()
@@ -483,12 +566,24 @@ export default function Universe({ players, visible, prospectData }) {
     const { scene, camera } = sceneRef.current
     const mount = mountRef.current
 
-    fetch('http://localhost:8000/similarity', {
+    if (prospectSpriteRef.current) {
+      scene.remove(prospectSpriteRef.current)
+      prospectSpriteRef.current.material.map?.dispose()
+      prospectSpriteRef.current.material.dispose()
+      prospectSpriteRef.current = null
+    }
+    if (prospectRingRef.current) {
+      scene.remove(prospectRingRef.current)
+      prospectRingRef.current.geometry.dispose()
+      prospectRingRef.current.material.dispose()
+      prospectRingRef.current = null
+    }
+
+    fetchJSON('http://localhost:8000/similarity', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(prospectData),
     })
-      .then(r => r.json())
       .then(data => {
         const { prospect, comps } = data
         setCompData(comps)
@@ -558,8 +653,6 @@ export default function Universe({ players, visible, prospectData }) {
             const nav   = navRef.current
             nav.yaw = euler.y; nav.pitch = euler.x
             nav.pos.copy(finalCameraPos)
-            nav.active = true
-            if (mount) mount.style.cursor = 'crosshair'
 
             // Comp markers
             const compTex = makeCompArcadeStarTexture()
@@ -573,6 +666,7 @@ export default function Universe({ players, visible, prospectData }) {
             })
             compSpritesRef.current = compSprites
             animatingRef.current   = false
+            arrangementLockedRef.current = true  // freeze camera during 3s pause
 
             // Snapshot for "continue to explore"
             savedNavRef.current = {
@@ -586,8 +680,6 @@ export default function Universe({ players, visible, prospectData }) {
             // ── Arrangement after 3 s ──────────────────────────────────
             setTimeout(() => {
               if (!sceneRef.current) return
-              nav.active = false
-              arrangementLockedRef.current = true
 
               // Fade all field stars (not comps) via opacityMul
               blinkStarsRef.current.forEach(entry => {
@@ -659,8 +751,6 @@ export default function Universe({ players, visible, prospectData }) {
   }, [prospectData])
 
   // ── Render ────────────────────────────────────────────────────────────────
-  const FONT = '"Press Start 2P", monospace'
-
   return (
     <>
       <div
@@ -672,6 +762,78 @@ export default function Universe({ players, visible, prospectData }) {
           pointerEvents: visible ? 'auto' : 'none',
         }}
       />
+
+      {selectedPlayer && visible && !arrangementActive && (
+        <div style={{
+          position: 'absolute', top: '24px', right: '24px',
+          maxHeight: 'calc(100vh - 48px)',
+          overflowY: 'auto',
+          background: 'rgba(0, 4, 18, 0.96)',
+          border: '2px solid #3a8fff',
+          boxShadow: '4px 4px 0 #001040, 0 0 28px rgba(58,143,255,0.3)',
+          padding: '16px 20px',
+          width: '260px',
+          fontFamily: FONT,
+          lineHeight: 2.2,
+          userSelect: 'none',
+          zIndex: 10,
+          pointerEvents: 'auto',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+            <div style={{ color: '#aaccff', fontSize: '8px', letterSpacing: '0.5px', lineHeight: 1.8 }}>
+              {selectedPlayer.name}
+            </div>
+            <button
+              onClick={() => { setSelectedPlayer(null); setSelectedComps([]) }}
+              style={{
+                background: 'none', border: 'none', color: '#3a8fff',
+                fontFamily: FONT, fontSize: '8px', cursor: 'pointer',
+                padding: '0 0 0 8px', lineHeight: 1,
+              }}
+            >×</button>
+          </div>
+
+          <div style={{ fontSize: '6px', color: '#556688', marginBottom: '10px', letterSpacing: '0.5px' }}>
+            {selectedPlayer.school && <span>{selectedPlayer.school}&nbsp;&nbsp;</span>}
+            <span>#{selectedPlayer.pick} · {selectedPlayer.draft_year}</span>
+          </div>
+
+          {selectedPlayer.archetype ? (
+            <>
+              <div style={{ color: '#ffdd00', fontSize: '10px', marginBottom: '4px', letterSpacing: '1px' }}>
+                {selectedPlayer.archetype.animal}
+              </div>
+              <div style={{ color: '#3a8fff', fontSize: '7px', marginBottom: '12px' }}>
+                {selectedPlayer.archetype.archetype}
+              </div>
+              <div style={{ borderTop: '1px solid #112244', paddingTop: '10px', fontSize: '6px', color: '#aaccff', lineHeight: 2.0 }}>
+                {selectedPlayer.archetype.writeup}
+              </div>
+            </>
+          ) : (
+            <div style={{ color: '#334466', fontSize: '6px' }}>NO ARCHETYPE DATA</div>
+          )}
+
+          {(selectedPlayer.stats?.p36_pts || selectedPlayer.stats?.p36_reb || selectedPlayer.stats?.p36_ast) && (
+            <div style={{ borderTop: '1px solid #112244', marginTop: '10px', paddingTop: '10px', fontSize: '7px', color: '#7aadff' }}>
+              {selectedPlayer.stats.p36_pts != null && <div>PTS/36&nbsp;&nbsp;{fmtStat(selectedPlayer.stats.p36_pts)}</div>}
+              {selectedPlayer.stats.p36_reb != null && <div>REB/36&nbsp;&nbsp;{fmtStat(selectedPlayer.stats.p36_reb)}</div>}
+              {selectedPlayer.stats.p36_ast != null && <div>AST/36&nbsp;&nbsp;{fmtStat(selectedPlayer.stats.p36_ast)}</div>}
+            </div>
+          )}
+
+          {selectedComps.length > 0 && (
+            <div style={{ borderTop: '1px solid #112244', marginTop: '10px', paddingTop: '10px', fontSize: '6px' }}>
+              <div style={{ color: '#556688', letterSpacing: '1px', marginBottom: '6px' }}>SIMILAR TO</div>
+              {selectedComps.map((c, i) => (
+                <div key={i} style={{ color: '#ff7700', marginBottom: '3px' }}>
+                  › {toKey(c.name)}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {arrangementActive && visible && (
         <div style={{
@@ -715,8 +877,8 @@ export default function Universe({ players, visible, prospectData }) {
               userSelect: 'none',
               pointerEvents: 'auto',
             }}>
-              <div style={{ color: '#ffdd00', fontSize: '10px', marginBottom: '14px', letterSpacing: '1px' }}>
-                ★&nbsp;PROSPECT&nbsp;★
+              <div style={{ color: '#ffdd00', fontSize: prospectData?.name ? '8px' : '10px', marginBottom: '14px', letterSpacing: '1px', lineHeight: 1.6 }}>
+                {prospectData?.name ? prospectData.name.toUpperCase() : '★ PROSPECT ★'}
               </div>
 
               <div style={{ fontSize: '7px', color: '#7aadff' }}>

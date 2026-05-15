@@ -33,6 +33,16 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ml.load_all()
+    # Warm up UMAP transform so the first user request isn't slow/broken.
+    # If this fails it means the pkl files were built with different package
+    # versions — run prepare_data.py then run_umap.py to regenerate them.
+    try:
+        ml.transform_prospect({})
+        print("INFO:     UMAP warm-up OK")
+    except Exception as e:
+        print(f"ERROR:    UMAP warm-up FAILED — pkl files need regeneration: {e}")
+        print("ERROR:    Run: python prepare_data.py tankathon_draft_picks.csv && python run_umap.py")
+        raise RuntimeError("Model files are stale — see above") from e
     yield
 
 
@@ -222,6 +232,11 @@ WRITEUP: [your 3 sentences, under 110 words]"""
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
+
+@app.get("/prospects/2026")
+def get_prospects_2026():
+    return {"prospects": ml.load_prospects_2026()}
+
 
 @app.get("/players")
 def get_players():

@@ -20,6 +20,16 @@ function AppInner() {
     staleTime: Infinity,
   })
 
+  const prospects2026Query = useQuery({
+    queryKey: ['prospects2026'],
+    queryFn: async () => {
+      const res = await fetch('http://localhost:8000/prospects/2026')
+      if (!res.ok) throw new Error('Failed to fetch 2026 prospects')
+      return res.json()
+    },
+    staleTime: Infinity,
+  })
+
   const handleSubmit = (values) => {
     setFormValues(values)
     setAppState('UNIVERSE')
@@ -43,6 +53,7 @@ function AppInner() {
         visible={appState === 'FORM'}
         playersReady={playersReady}
         medians={playersQuery.data?.medians ?? {}}
+        prospects2026={prospects2026Query.data?.prospects ?? []}
         onSubmit={handleSubmit}
       />
     </div>

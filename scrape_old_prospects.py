@@ -2,7 +2,7 @@
 Tankathon Past Draft Scraper
 Scrapes 1st-round picks 2010-2025, visits each player page, outputs CSV.
     pip install requests beautifulsoup4
-    python tankathon_scraper.py
+    python scrape_old_prospects.py
 """
 import csv, os, re, sys, time, requests
 from dataclasses import dataclass, fields, asdict

@@ -202,7 +202,7 @@ def main():
     df = df[mask].copy()
     print(f"  Kept {len(df)} / {len(df)+len(dropped)} players")
     if len(dropped):
-        print(f"  Dropped: {', '.join(dropped['name'].str.split('|').str[0].str.strip().tolist())}")
+        print(f"  Dropped: {', '.join(dropped['name'].str.split('|').str[0].str.strip().tolist())}".encode('ascii', errors='replace').decode('ascii'))
 
     # ── Step 4b: Capture limited_data flag BEFORE imputation ─────────────────
     # Players missing >30% of features flagged — mostly international players

@@ -80,7 +80,6 @@ def main():
     df["umap_x"] = X_umap[:, 0]
     df["umap_y"] = X_umap[:, 1]
     df["umap_z"] = X_umap[:, 2]
-    df["umap_z"] = X_umap[:, 2]
 
     # ── Similarity search function ─────────────────────────────────────────────
     # NOTE: similarity is computed in PCA space (not UMAP space)
@@ -127,7 +126,6 @@ def main():
     print(f"  umap_x: [{df['umap_x'].min():.2f}, {df['umap_x'].max():.2f}]")
     print(f"  umap_y: [{df['umap_y'].min():.2f}, {df['umap_y'].max():.2f}]")
     print(f"  umap_z: [{df['umap_z'].min():.2f}, {df['umap_z'].max():.2f}]")
-    print(f"  umap_z: [{df['umap_z'].min():.2f}, {df['umap_z'].max():.2f}]")
 
     print("\n=== SAMPLE COORDINATES (notable players) ===")
     notables = ["Cooper Flagg", "Zion", "John Wall", "Karl-Anthony Towns",
@@ -136,8 +134,8 @@ def main():
         row = df[df["name"].str.contains(p, case=False, na=False)]
         if len(row):
             r = row.iloc[0]
-            print(f"  {r['name'].split('|')[0].strip():<28} "
-                  f"umap=({r['umap_x']:+.2f}, {r['umap_y']:+.2f}, {r['umap_z']:+.2f})")
+            name = r['name'].split('|')[0].strip().encode('ascii', errors='replace').decode('ascii')
+            print(f"  {name:<28} umap=({r['umap_x']:+.2f}, {r['umap_y']:+.2f}, {r['umap_z']:+.2f})")
 
 
 if __name__ == "__main__":
