@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { supabase, supabaseReady } from '../lib/supabase'
 
 const POSITIONS = ['PG', 'SG', 'SF', 'PF', 'C']
 const FEET_OPTIONS = [5, 6, 7, 8]
@@ -140,12 +141,19 @@ function SubmitButton({ disabled, label, playersReady }) {
 export default function ProspectForm({ visible, playersReady, medians, onSubmit, prospects2026 = [] }) {
   const [tab, setTab] = useState('2026')
   const [selectedSlug, setSelectedSlug] = useState('')
+  const [customMode, setCustomMode] = useState(false)   // swap 2026 dropdown ↔ custom stat entry
+
+  // Rookie ladder state
+  const [ladder, setLadder]   = useState(['', '', '', '', ''])   // 5 slugs, rank 1–5
+  const [contact, setContact] = useState('')
+  const [rookieStatus, setRookieStatus] = useState('idle')       // idle | submitting | success | error
+  const [rookieError,  setRookieError]  = useState('')
 
   // Custom form state
   const [open, setOpen] = useState({ combine: false, perGame: false, per36: false, advanced: false })
   const [vals, setVals] = useState({
     name: '',
-    position: '', heightFt: '6', heightIn: '', weight: '', age: '',
+    position: '', heightFt: '', heightIn: '', weight: '', age: '',
     maxVertical: '', laneAgility: '', shuttle: '', sprint: '',
     wingspanFt: '', wingspanIn: '',
     pg_g: '', pg_mp: '', pg_fg_pct: '', pg_ft_pct: '',
@@ -223,6 +231,40 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
     })
   }
 
+  // ── Rookie ladder submit ─────────────────────────────────────────────────────
+  const setLadderSlot = (i, slug) => setLadder(prev => prev.map((s, idx) => (idx === i ? slug : s)))
+
+  const canSubmitRookie =
+    playersReady &&
+    contact.trim() !== '' &&
+    ladder.every(Boolean) &&
+    new Set(ladder).size === 5
+
+  const handleRookieSubmit = async (e) => {
+    e.preventDefault()
+    if (!canSubmitRookie || rookieStatus === 'submitting') return
+    if (!supabaseReady) {
+      setRookieError('Predictions database is not configured yet (missing Supabase env vars).')
+      setRookieStatus('error')
+      return
+    }
+    setRookieStatus('submitting')
+    setRookieError('')
+    const predictions = ladder.map((slug, i) => {
+      const p = prospects2026.find(x => x.slug === slug)
+      return { rank: i + 1, slug, name: p?.name ?? slug }
+    })
+    const { error } = await supabase
+      .from('rookie_ladder_predictions')
+      .insert([{ contact_method: contact.trim(), predictions }])
+    if (error) {
+      setRookieError(error.message)
+      setRookieStatus('error')
+    } else {
+      setRookieStatus('success')
+    }
+  }
+
   return (
     <div style={{
       position: 'absolute', inset: 0,
@@ -243,26 +285,20 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
 
         {/* Header */}
         <div style={{ marginBottom: '24px' }}>
-          <div style={{ fontFamily: ARCADE, fontSize: '6px', letterSpacing: '0.12em', color: '#334466', marginBottom: '12px' }}>
-            NBA DRAFT COMPS
-          </div>
           <h1 style={{ margin: '0 0 6px', fontSize: '20px', fontWeight: 600, color: '#d0d0e8', letterSpacing: '-0.02em', lineHeight: 1.2 }}>
             Enter the Draft Universe
           </h1>
-          <p style={{ margin: 0, fontSize: '13px', color: '#4a4a68', lineHeight: 1.5 }}>
-            Find nearest historical comps in the 3D draft galaxy.
-          </p>
         </div>
 
         {/* Tabs */}
         <div style={{ display: 'flex', borderBottom: '1px solid #112244', marginBottom: '24px' }}>
-          {[['2026', '2026 CLASS'], ['custom', 'CUSTOM']].map(([key, label]) => {
+          {[['2026', '2026 CLASS'], ['rookie', 'ROOKIE LADDER']].map(([key, label]) => {
             const active = tab === key
             return (
               <button
                 key={key}
                 type="button"
-                onClick={() => setTab(key)}
+                onClick={() => { setTab(key); setCustomMode(false) }}
                 style={{
                   fontFamily: ARCADE, fontSize: '6px', letterSpacing: '1px',
                   background: 'none', border: 'none', cursor: 'pointer',
@@ -279,8 +315,8 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
           })}
         </div>
 
-        {/* ── 2026 CLASS tab ─────────────────────────────────────────────────── */}
-        {tab === '2026' && (
+        {/* ── 2026 CLASS tab (dropdown view) ──────────────────────────────────── */}
+        {tab === '2026' && !customMode && (
           <form onSubmit={handle2026Submit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
             {prospects2026.length === 0 ? (
@@ -289,8 +325,24 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
               </div>
             ) : (
               <>
-                {/* Dropdown */}
-                <Field label="Select Prospect">
+                {/* Dropdown + custom-entry switch */}
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <label style={labelStyle}>Select Prospect</label>
+                    <button
+                      type="button"
+                      onClick={() => setCustomMode(true)}
+                      style={{
+                        background: 'none', border: 'none', cursor: 'pointer',
+                        color: '#3a8fff', fontFamily: ARCADE, fontSize: '6px',
+                        letterSpacing: '0.5px', padding: '2px 4px',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.color = '#ffffff' }}
+                      onMouseLeave={e => { e.currentTarget.style.color = '#3a8fff' }}
+                    >
+                      + CUSTOM STATS
+                    </button>
+                  </div>
                   <select
                     value={selectedSlug}
                     onChange={e => setSelectedSlug(e.target.value)}
@@ -305,7 +357,7 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
                       </option>
                     ))}
                   </select>
-                </Field>
+                </div>
 
                 {/* Prospect card */}
                 {selectedProspect && (
@@ -335,9 +387,22 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
           </form>
         )}
 
-        {/* ── CUSTOM tab ─────────────────────────────────────────────────────── */}
-        {tab === 'custom' && (
+        {/* ── CUSTOM stat entry (swapped in from the 2026 tab) ────────────────── */}
+        {tab === '2026' && customMode && (
           <form onSubmit={handleCustomSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+            <button
+              type="button"
+              onClick={() => setCustomMode(false)}
+              style={{
+                alignSelf: 'flex-start', background: 'none', border: 'none', cursor: 'pointer',
+                color: '#3a8fff', fontFamily: ARCADE, fontSize: '6px', letterSpacing: '0.5px', padding: '0',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.color = '#ffffff' }}
+              onMouseLeave={e => { e.currentTarget.style.color = '#3a8fff' }}
+            >
+              ◀ BACK TO 2026 CLASS
+            </button>
 
             <div style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#3a3a58', paddingBottom: '4px', borderBottom: '1px solid #141420' }}>
               Required
@@ -348,7 +413,6 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
                 type="text"
                 value={vals.name}
                 onChange={set('name')}
-                placeholder="Prospect name"
                 style={inputStyle}
                 onFocus={e => { e.target.style.borderColor = '#3a3a5a' }}
                 onBlur={e => { e.target.style.borderColor = '#1e1e30' }}
@@ -497,6 +561,101 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
               playersReady={playersReady}
             />
           </form>
+        )}
+
+        {/* ── ROOKIE LADDER tab ──────────────────────────────────────────────── */}
+        {tab === 'rookie' && (
+          rookieStatus === 'success' ? (
+            <div style={{ textAlign: 'center', padding: '24px 8px' }}>
+              <div style={{ fontFamily: ARCADE, fontSize: '9px', color: '#ffdd00', letterSpacing: '1px', lineHeight: 2 }}>
+                PREDICTION LOGGED
+              </div>
+              <div style={{ fontSize: '12px', color: '#7aadff', marginTop: '14px', lineHeight: 1.6 }}>
+                Thanks — your rookie ladder is saved. We&apos;ll reach out via the contact you gave.
+              </div>
+              <button
+                type="button"
+                onClick={() => { setLadder(['', '', '', '', '']); setContact(''); setRookieStatus('idle') }}
+                style={{
+                  marginTop: '20px', background: 'none', border: 'none', cursor: 'pointer',
+                  color: '#3a8fff', fontFamily: ARCADE, fontSize: '6px', letterSpacing: '0.5px',
+                }}
+              >
+                + SUBMIT ANOTHER
+              </button>
+            </div>
+          ) : (
+          <form onSubmit={handleRookieSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+            <div style={{ fontSize: '12px', color: '#7aadff', lineHeight: 1.6 }}>
+              Predict the 2026 <span style={{ color: '#ffdd00' }}>Rookie Ladder</span>!
+            </div>
+
+            {prospects2026.length === 0 ? (
+              <div style={{ fontFamily: ARCADE, fontSize: '6px', color: '#334466', textAlign: 'center', padding: '24px 0' }}>
+                LOADING PROSPECTS...
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {ladder.map((slug, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ fontFamily: ARCADE, fontSize: '9px', color: '#ffdd00', width: '14px', textAlign: 'right', flexShrink: 0 }}>
+                      {i + 1}
+                    </div>
+                    <select
+                      value={slug}
+                      onChange={e => setLadderSlot(i, e.target.value)}
+                      style={{ ...inputStyle, cursor: 'pointer', color: slug ? '#e0e0f0' : '#3a3a58' }}
+                      onFocus={e => { e.target.style.borderColor = '#3a3a5a' }}
+                      onBlur={e => { e.target.style.borderColor = '#1e1e30' }}
+                    >
+                      <option value="" disabled>— pick a rookie —</option>
+                      {prospects2026.map(p => {
+                        const taken = ladder.includes(p.slug) && slug !== p.slug
+                        return (
+                          <option
+                            key={p.slug}
+                            value={p.slug}
+                            disabled={taken}
+                            style={taken
+                              ? { color: '#2b2b38', background: '#08080d' }
+                              : { color: '#e0e0f0', background: '#0f0f1a' }}
+                          >
+                            {p.name}  ·  {p.position}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <Field label="Preferred contact method">
+              <input
+                type="text"
+                value={contact}
+                onChange={e => setContact(e.target.value)}
+                placeholder="email, phone, Instagram, Discord"
+                style={inputStyle}
+                onFocus={e => { e.target.style.borderColor = '#3a3a5a' }}
+                onBlur={e => { e.target.style.borderColor = '#1e1e30' }}
+              />
+            </Field>
+
+            {rookieStatus === 'error' && (
+              <div style={{ color: '#ff4444', fontSize: '11px', lineHeight: 1.5 }}>
+                {rookieError || 'Something went wrong — please try again.'}
+              </div>
+            )}
+
+            <SubmitButton
+              disabled={!canSubmitRookie || rookieStatus === 'submitting'}
+              label={rookieStatus === 'submitting' ? 'SUBMITTING...' : 'SUBMIT PREDICTION ▶'}
+              playersReady={playersReady}
+            />
+          </form>
+          )
         )}
       </div>
     </div>

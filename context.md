@@ -88,8 +88,10 @@ return StreamingResponse(generate(), media_type="text/plain")
 
 ### Hosting
 - **Railway** — FastAPI backend (env var: GEMINI_API_KEY)
-- **Vercel** — React frontend
+- **Vercel** — React frontend (planned; see "Deployment Plan" section)
+- **Supabase** — stores Rookie Ladder predictions (planned; see "Rookie Ladder Prediction" section)
 - CORS: allow_credentials=False (no auth), allow_origins wildcard ok
+- Frontend secrets use Vite `VITE_`-prefixed env vars (exposed to client — only put public values there, e.g. Supabase anon key). GEMINI/ANTHROPIC keys stay backend-only.
 
 ---
 
@@ -418,10 +420,7 @@ python=3.13, numpy=2.4.4, pandas=3.0.2, scikit-learn=1.8.0, numba=0.65.1
 pip: fastapi==0.136.1, uvicorn[standard]==0.46.0, umap-learn==0.5.12,
      pydantic==2.13.2, google-genai==1.73.1, anthropic==0.97.0, python-dotenv>=1.0.0
 ```
-- Use Python 3.13 explicitly: `C:\Users\brand\AppData\Local\Programs\Python\Python313\python.exe`
-- Shell `python` may resolve to Python 3.14 (Windows Apps) — always use full path or conda env
-- Run backend: `python -m uvicorn main:app --host 0.0.0.0 --port 8000` from `backend/`
-- sklearn InconsistentVersionWarning on load (pkl saved with 1.6.1, running 1.8.0) — non-fatal
+- sklearn `InconsistentVersionWarning` / "X does not have valid feature names" `UserWarning` on load — both non-fatal, ignore.
 
 ### .env (project root)
 ```
@@ -429,6 +428,147 @@ GEMINI_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
 No quotes around values — Python dotenv breaks with quoted strings.
+
+---
+
+## Running Locally (tested 2026-07-13, Windows 11 + PowerShell)
+
+Two processes: **backend** (FastAPI/uvicorn on port 8000) and **frontend** (Vite on port 5173).
+The frontend hardcodes `http://localhost:8000` (see `App.jsx`, `Universe.jsx`), so the backend MUST be on 8000.
+
+### 0. One-time: create the conda env (if it doesn't exist)
+`conda` is NOT on PATH. Full path: `C:\Users\brand\anaconda3\Scripts\conda.exe`.
+Existing envs are only `base` (py3.12) and `A4` — neither has the backend deps. Create `draftverse`:
+```powershell
+& "$env:USERPROFILE\anaconda3\Scripts\conda.exe" env create -f "C:\Users\brand\Desktop\Draftverse\environment.yml"
+```
+(Takes several minutes. Verify: `conda env list` shows `draftverse`.)
+
+### 1. Backend — CRITICAL: launch via `conda run`, NOT the env's python.exe directly
+On Windows, invoking `...\envs\draftverse\python.exe` directly **hard-crashes on `import numpy`**
+(negative exit code, no traceback) because the env isn't activated so its `Library\bin` MKL/BLAS
+DLLs aren't on PATH. This looks like the pkl segfault gotcha but is NOT — it's a DLL-path issue.
+Always go through `conda run ... --no-capture-output` (the flag keeps uvicorn's live output/streaming working):
+```powershell
+$conda = "$env:USERPROFILE\anaconda3\Scripts\conda.exe"
+Set-Location "C:\Users\brand\Desktop\Draftverse\backend"
+& $conda run -n draftverse --no-capture-output python -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
+Backend is ready when `GET http://127.0.0.1:8000/players` returns 200 (462 players).
+`GET /prospects/2026` returns `{ "prospects": [...30...] }` (first: AJ Dybantsa).
+
+### 2. Frontend — Vite dev server
+Node v24, npm 11. Deps already installed in `frontend/node_modules`.
+```powershell
+Set-Location "C:\Users\brand\Desktop\Draftverse\frontend"
+npm run dev
+```
+Serves on http://localhost:5173/ . Open it in a browser. HMR picks up edits automatically.
+
+### Smoke test (both up)
+- `Invoke-RestMethod http://127.0.0.1:8000/players` → `.players.Count` = 462
+- `Invoke-WebRequest http://localhost:5173/` → HTTP 200, contains `id="root"`
+- Gemini streaming (`/similarity/blurb`) needs `GEMINI_API_KEY` in `.env` (loaded automatically).
+
+### pkl version gotcha (still real, separate from the DLL issue above)
+`scaler.pkl` / `pca.pkl` / `umap_model.pkl` are version-sensitive. With the pinned `draftverse`
+env the startup warm-up transform succeeds. If it ever segfaults (silent process death during
+"Waiting for application startup"), regenerate: `python prepare_data.py tankathon_draft_picks.csv`
+then `python run_umap.py` (both from repo root, via `conda run -n draftverse`).
+
+---
+
+## Rookie Ladder Prediction (FRONTEND BUILT 2026-07-13 — awaiting Supabase keys)
+
+**⏭️ RESUME HERE NEXT SESSION:** the frontend is done; the feature just needs Supabase wired.
+1. Create the Supabase project + run the table/RLS SQL below (SQL Editor).
+2. Put Project URL + anon key into `frontend/.env.local` (empty placeholders already committed-less/gitignored there).
+3. Restart Vite (env is read only at startup — HMR won't pick up `.env.local`), submit a test prediction, confirm a row lands in `rookie_ladder_predictions`.
+4. Then Vercel deploy — see "Deployment Plan" (do the `VITE_API_BASE` fix first).
+
+**Built so far (frontend only, no backend changes):** the feature lives in `ProspectForm.jsx`
+(NOT a separate `RookieLadder.jsx`). Tabs are now `2026 CLASS` | `ROOKIE LADDER` (old CUSTOM tab
+removed); custom stat entry moved to a `+ CUSTOM STATS` button beside "Select Prospect" that swaps
+the card (with `◀ BACK TO 2026 CLASS`); "NBA DRAFT COMPS" header label removed. ROOKIE LADDER tab =
+5 ranked dropdowns from the 30 prospects (already-picked options blacked-out + disabled), free-text
+contact (placeholder "email, phone, Instagram, Discord"), submit → `supabase.insert()` (no
+`.select()`), success/error states, heading "Predict the 2026 Rookie Ladder!". Added
+`frontend/src/lib/supabase.js` (exports `supabase` + `supabaseReady`) and gitignored
+`frontend/.env.local`. Installed `@supabase/supabase-js`. Contact-only (no predictor-name field;
+column kept). Until keys are set, submit shows a "not configured" error.
+
+**Concept:** Let users predict the NBA Rookie Ladder ~1 year out — an ordered **Top 5** of
+the rookies they think will finish the season highest — plus a free-form **preferred contact
+method**. Each submission (ranking + contact) is stored in **Supabase**.
+
+**Approved design decisions (2026-07-13):**
+- **Write path — direct from frontend.** React uses `@supabase/supabase-js` to `.insert()`
+  straight into Supabase, guarded by an **insert-only Row-Level Security (RLS) policy**. No
+  FastAPI changes. Chosen over routing through the backend because it's simpler, lower-latency,
+  and keeps the form working even when the Railway ML backend is asleep. The anon key is public
+  by design; RLS is what enforces safety.
+- **Prediction format — Top 5, ordered (rank 1–5).** Matches the real NBA.com Rookie Ladder.
+- **Player pool — the 30 in `prospects_2026`.** Users pick/rank from the existing 2026 dropdown
+  players → clean, slug-keyed data (no free-text typos). Future enhancement: one optional
+  "wildcard / other" free-text slot for a riser outside the top 30.
+- **Contact — single free-text field.** Accepts anything (email / phone / social handle / etc.).
+  Optional predictor name is a possible add — decide at build time.
+
+**Supabase data model** — table `rookie_ladder_predictions`:
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | PK, default `gen_random_uuid()` |
+| `created_at` | timestamptz | default `now()` |
+| `contact_method` | text | NOT NULL, free-form |
+| `predictions` | jsonb | ordered array: `[{ "rank":1, "slug":"aj-dybantsa", "name":"AJ Dybantsa" }, …5]` (store slug + name for resilience) |
+| `predictor_name` | text | nullable, optional (only if collected) |
+
+RLS: enable on the table; add a policy allowing **INSERT for the `anon` role only** (no
+SELECT/UPDATE/DELETE for anon — reads happen via the Supabase dashboard / service key). Add a
+CHECK for non-empty `contact_method`. Spam/dedupe handling is minimal (portfolio scope).
+
+Policy SQL: `CREATE POLICY "anon_insert" ON public.rookie_ladder_predictions FOR INSERT TO anon WITH CHECK (true);`
+
+**Sanity-checked against Supabase docs (2026-07-13):**
+- ✅ **Free tier easily covers this** — 500 MB DB / 2 active projects / unlimited API requests / 5 GB egress. Prediction rows are tiny.
+- ⚠️ **BIGGEST GOTCHA — free projects PAUSE after 1 week of inactivity** (need ~a few DB requests/day to stay awake). For a low-traffic portfolio app this means the form can silently break until manually resumed in the dashboard. Mitigation: a daily keep-alive ping (GitHub Action / cron hitting the DB), or accept manual resume, or upgrade to Pro. Decide before/at deploy.
+- ⚠️ **Do NOT chain `.select()` on the insert.** With insert-only RLS (no SELECT policy), `supabase.from('rookie_ladder_predictions').insert([row])` works, but `.insert([row]).select()` would fail/return nothing because reading back the row needs a SELECT policy — which we intentionally don't grant. Keep it insert-only, no `.select()`.
+- ✅ **No CORS setup needed** — the Supabase data API is public and keyed by the anon key; it accepts requests from any origin (incl. the Vercel domain).
+- Note: creating the table + policy via the Supabase dashboard grants `anon` the needed schema/table privileges automatically (raw-SQL setup would also need `GRANT USAGE ON SCHEMA public` + `GRANT INSERT` to `anon`).
+- Duplicate-pick prevention (5 distinct slugs) is **client-side only**; the DB won't enforce distinctness unless we add a CHECK/trigger. Fine for v1.
+
+**Frontend work (all new — NO CODE YET):**
+- `frontend/src/lib/supabase.js` — init client from `import.meta.env.VITE_SUPABASE_URL` +
+  `VITE_SUPABASE_ANON_KEY`.
+- New component `RookieLadder.jsx` — 5 ranked slots each selecting from the 30 prospects
+  (drag-to-order or 5 dropdowns), block duplicate picks; free-text contact input; submit →
+  `.insert()`; success + error states.
+- Entry point: app currently toggles `FORM` ↔ `UNIVERSE` via `appState` in `App.jsx`. Add a
+  third screen/state or a button on the landing form ("Predict the Rookie Ladder"). Exact
+  placement TBD at build.
+- Add `@supabase/supabase-js` to `frontend/package.json`.
+
+**Env vars** (Vite exposes only `VITE_`-prefixed to the client — correct here, anon key is public):
+`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` → `frontend/.env.local` for dev, Vercel project
+settings for prod.
+
+**Out of scope for v1:** scoring predictions vs. the actual end-of-season ladder, public
+leaderboard, editing/auth. Capture as future ideas.
+
+---
+
+## Deployment Plan (Vercel — AFTER the Rookie Ladder feature works)
+
+Deploy the React frontend to Vercel; keep the FastAPI backend on Railway.
+- **Vercel config:** Root Directory = `frontend`, Framework preset = Vite, Build = `npm run build`,
+  Output = `dist`.
+- **PRE-DEPLOY BLOCKER — hardcoded backend URL.** `App.jsx` and `Universe.jsx` hardcode
+  `http://localhost:8000` (5 spots). Replace with an env-driven base
+  (`const API = import.meta.env.VITE_API_BASE`) and set `VITE_API_BASE` to the Railway URL in
+  Vercel — otherwise prod calls localhost.
+- **Vercel env vars:** `VITE_API_BASE`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
+- **Backend CORS:** set `CORS_ORIGINS` (read in `backend/main.py`) to the Vercel domain(s) once known.
+- **Supabase:** create project + table + RLS policy before the first prod submit; mirror env vars locally.
 
 ---
 
@@ -443,7 +583,17 @@ No quotes around values — Python dotenv breaks with quoted strings.
 6. **Click to explore** — clicking any star calls `GET /players/{slug}/similar`,
    shows precomputed archetype panel + illuminates 3 nearest neighbors
 7. **Search again button** — unobtrusive, returns to form
-8. **Animal sprites** — precompute ~40 pixel-art animal PNGs, serve from `frontend/public/animals/`,
-   display in prospect panel. Extract unique animal list from `player_archetypes.json` first.
-9. **Deploy** — Railway (backend) + Vercel (frontend)
-10. **Add player_slug to ID_COLS in prepare_data.py** — for future pipeline runs
+8. ~~**Animal sprites**~~ ❌ ABANDONED (2026-07-13). Built 32×32 pixel-art animal head-portrait
+   sprites replacing arcade stars in the galaxy; user reaction on first live view was "it looks
+   terrible." Reverted the `Universe.jsx` wiring and deleted `animal_sprites.json`,
+   `sprite_preview.html`, and `generate_sprites.py`. Galaxy uses `makeArcadeStarTexture` again.
+   The Gemini archetype animal *name text* in the scouting panel stays — that's separate.
+   Do NOT re-attempt per-animal galaxy sprites.
+9. **Rookie Ladder prediction feature** — FRONTEND BUILT 2026-07-13. Remaining: create Supabase
+   project + table/RLS, add keys to `frontend/.env.local`, restart Vite, test a real submission.
+   See "Rookie Ladder Prediction" section.
+10. **Pre-deploy: replace hardcoded `http://localhost:8000`** with `VITE_API_BASE` env in
+    `App.jsx` + `Universe.jsx` (blocks the Vercel deploy).
+11. **Deploy** — Railway (backend) + Vercel (frontend) + Supabase (predictions).
+    See "Deployment Plan" section. Do this AFTER the Rookie Ladder feature works.
+12. **Add player_slug to ID_COLS in prepare_data.py** — for future pipeline runs

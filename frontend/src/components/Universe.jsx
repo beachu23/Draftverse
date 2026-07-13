@@ -448,7 +448,6 @@ export default function Universe({ players, visible, prospectData }) {
             .map(c => spritesMapRef.current.get(toKey(c.name)))
             .filter(Boolean)
           compSprites.forEach(sprite => {
-            sprite.material.color.setHex(0xff7700)
             gsap.to(sprite.scale, { x: 16, y: 16, duration: 0.2 })
           })
           selectedCompSpritesRef.current = compSprites
@@ -824,7 +823,7 @@ export default function Universe({ players, visible, prospectData }) {
 
           {selectedComps.length > 0 && (
             <div style={{ borderTop: '1px solid #112244', marginTop: '10px', paddingTop: '10px', fontSize: '6px' }}>
-              <div style={{ color: '#556688', letterSpacing: '1px', marginBottom: '6px' }}>SIMILAR TO</div>
+              <div style={{ color: '#556688', letterSpacing: '1px', marginBottom: '6px' }}>Similar Prospects</div>
               {selectedComps.map((c, i) => (
                 <div key={i} style={{ color: '#ff7700', marginBottom: '3px' }}>
                   › {toKey(c.name)}
@@ -914,7 +913,7 @@ export default function Universe({ players, visible, prospectData }) {
                   </div>
                 ) : (
                   <div style={{ color: '#334466', fontSize: '6px', letterSpacing: '2px' }}>
-                    SCOUTING REPORT
+                    GENERATING ARCHETYPE
                     <div style={{ color: '#445577', marginTop: '6px' }}>
                       {scoutingLoading
                         ? 'Generating..'
