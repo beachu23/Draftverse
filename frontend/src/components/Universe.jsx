@@ -5,6 +5,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import gsap from 'gsap'
+import { API_BASE } from '../lib/api'
 
 // ─── Pixel helpers ────────────────────────────────────────────────────────────
 
@@ -235,7 +236,7 @@ export default function Universe({ players, visible, prospectData }) {
     setScoutingLoading(true)
     let cancelled = false
 
-    fetch('http://localhost:8000/similarity/blurb', {
+    fetch(`${API_BASE}/similarity/blurb`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(prospectData),
@@ -356,6 +357,9 @@ export default function Universe({ players, visible, prospectData }) {
 
     // Input
     function onKeyDown(e) {
+      // Don't hijack WASD while the user is typing in a form field.
+      const t = e.target
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
       const k = e.key.toLowerCase()
       if (['w','s','a','d'].includes(k)) e.preventDefault()
       keysRef.current.add(k)
@@ -442,7 +446,7 @@ export default function Universe({ players, visible, prospectData }) {
       setSelectedComps([])
 
       const slug = playerData.name.toLowerCase().replace(/ /g, '-').replace(/'/g, '')
-      fetchJSON(`http://localhost:8000/players/${encodeURIComponent(slug)}/similar`)
+      fetchJSON(`${API_BASE}/players/${encodeURIComponent(slug)}/similar`)
         .then(d => {
           const compSprites = d.similar
             .map(c => spritesMapRef.current.get(toKey(c.name)))
@@ -578,7 +582,7 @@ export default function Universe({ players, visible, prospectData }) {
       prospectRingRef.current = null
     }
 
-    fetchJSON('http://localhost:8000/similarity', {
+    fetchJSON(`${API_BASE}/similarity`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(prospectData),

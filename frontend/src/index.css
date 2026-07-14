@@ -32,3 +32,9 @@ select option {
   background: #1a1a2e;
   color: #c0c0e0;
 }
+
+/* Dull placeholder so it reads as a prompt, not entered text */
+.contact-input::placeholder {
+  color: #3a3a58;
+  opacity: 1;
+}

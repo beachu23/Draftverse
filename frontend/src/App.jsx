@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import ProspectForm from './components/ProspectForm'
 import Universe from './components/Universe'
+import { API_BASE } from './lib/api'
 import './index.css'
 
 const queryClient = new QueryClient()
@@ -13,7 +14,7 @@ function AppInner() {
   const playersQuery = useQuery({
     queryKey: ['players'],
     queryFn: async () => {
-      const res = await fetch('http://localhost:8000/players')
+      const res = await fetch(`${API_BASE}/players`)
       if (!res.ok) throw new Error('Failed to fetch players')
       return res.json()
     },
@@ -23,7 +24,7 @@ function AppInner() {
   const prospects2026Query = useQuery({
     queryKey: ['prospects2026'],
     queryFn: async () => {
-      const res = await fetch('http://localhost:8000/prospects/2026')
+      const res = await fetch(`${API_BASE}/prospects/2026`)
       if (!res.ok) throw new Error('Failed to fetch 2026 prospects')
       return res.json()
     },

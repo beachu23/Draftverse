@@ -15,8 +15,12 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 from playwright.sync_api import sync_playwright
 
 BASE_URL = "https://www.tankathon.com"
+# The live /mock_draft page rolls over to the next class after each draft, so
+# pull the archived 2026 board instead (same page format, 2 rounds = 60 picks).
+DRAFT_URL = f"{BASE_URL}/past-drafts/2026"
 DELAY    = 1.5
 OUTPUT   = "prospects_2026.csv"
+MAX_PROSPECTS = 60   # 2 rounds (60 picks)
 
 _playwright = None
 _browser = None
@@ -122,13 +126,13 @@ def parse_stat(s):
 SKIP_SLUGS = {"compare"}
 
 def scrape_mock_draft_slugs():
-    print("Fetching mock draft page...")
-    soup = get_soup(f"{BASE_URL}/mock_draft")
+    print(f"Fetching draft board: {DRAFT_URL}")
+    soup = get_soup(DRAFT_URL)
     if not soup: return []
     slugs = []
     seen = set()
     for node in soup.descendants:
-        if len(slugs) >= 30:
+        if len(slugs) >= MAX_PROSPECTS:
             break
         if not isinstance(node, Tag) or node.name != "a":
             continue
@@ -146,7 +150,7 @@ def scrape_mock_draft_slugs():
         if slug not in seen:
             seen.add(slug)
             slugs.append({"slug": slug, "name": name})
-    print(f"  Found {len(slugs)} prospects (capped at 30)")
+    print(f"  Found {len(slugs)} prospects (capped at {MAX_PROSPECTS})")
     return slugs
 
 # ── Scrape individual player page ─────────────────────────────────────────────

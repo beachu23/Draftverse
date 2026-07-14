@@ -11,3 +11,16 @@ const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 export const supabaseReady = Boolean(url && anonKey)
 
 export const supabase = supabaseReady ? createClient(url, anonKey) : null
+
+// Ensure there's an (anonymous) auth session so each device maps to a stable
+// user_id. Reuses the persisted session on reload; only signs in when none
+// exists. This backs the one-prediction-per-user unique constraint on the
+// rookie_ladder_predictions table (predictions default user_id = auth.uid()).
+export async function ensureAnonSession() {
+  if (!supabase) return null
+  const { data: { session } } = await supabase.auth.getSession()
+  if (session?.user) return session.user
+  const { data, error } = await supabase.auth.signInAnonymously()
+  if (error) throw error
+  return data.user
+}

@@ -478,13 +478,48 @@ then `python run_umap.py` (both from repo root, via `conda run -n draftverse`).
 
 ---
 
-## Rookie Ladder Prediction (FRONTEND BUILT 2026-07-13 — awaiting Supabase keys)
+## Rookie Ladder Prediction (FRONTEND DONE + WIRED 2026-07-14 — final testing)
 
-**⏭️ RESUME HERE NEXT SESSION:** the frontend is done; the feature just needs Supabase wired.
-1. Create the Supabase project + run the table/RLS SQL below (SQL Editor).
-2. Put Project URL + anon key into `frontend/.env.local` (empty placeholders already committed-less/gitignored there).
-3. Restart Vite (env is read only at startup — HMR won't pick up `.env.local`), submit a test prediction, confirm a row lands in `rookie_ladder_predictions`.
-4. Then Vercel deploy — see "Deployment Plan" (do the `VITE_API_BASE` fix first).
+**Status 2026-07-14:** Supabase keys are in `frontend/.env.local` (URL + `sb_publishable_...`
+key), the `rookie_ladder_predictions` table exists with RLS. Frontend expanded to **10 ranked
+slots** (`LADDER_SIZE` const in `ProspectForm.jsx`) and switched to **Supabase anonymous-auth +
+one-prediction-per-user** (see below). `VITE_API_BASE` deploy blocker RESOLVED.
+
+**⏭️ RESUME HERE — 2 Supabase-side steps left, then test:**
+1. Dashboard → **Authentication → Sign In/Providers → enable "Allow anonymous sign-ins"** (required
+   or `signInAnonymously()` fails).
+2. Run the **anon-auth migration SQL** (below) in the SQL Editor — adds `user_id` (default
+   `auth.uid()`, NOT NULL, UNIQUE), swaps the `anon_insert` policy for `authenticated`
+   insert/select-own policies. NOTE: it wipes pre-auth test rows.
+3. Test: submit once (→ "PREDICTION LOGGED"), try again (→ "ALREADY PREDICTED"), confirm the row
+   in the Table Editor.
+4. Then Vercel deploy — see "Deployment Plan".
+
+**One-prediction-per-user design (chosen 2026-07-14 over localStorage / unique-contact / both):**
+Supabase **anonymous auth** — `ensureAnonSession()` in `lib/supabase.js` signs the browser in
+anonymously (persisted in localStorage, reused on reload) → stable `user_id`. Table has
+`user_id uuid not null default auth.uid()` with a `UNIQUE` constraint = DB-enforced one row per
+user. On load the form checks for an existing row (→ "ALREADY PREDICTED"); a duplicate insert
+returns Postgres `23505` → same state. The "+ SUBMIT ANOTHER" button was removed. **Caveat:** anon
+session lives in localStorage, so incognito / cleared storage / another device = new user (can
+resubmit). Strongest option short of real email/OAuth login; server-enforced per identity, not a
+bypassable client flag.
+
+**Anon-auth migration SQL (run once; ⚠️ first line deletes existing test rows):**
+```sql
+delete from public.rookie_ladder_predictions where true;
+alter table public.rookie_ladder_predictions
+  add column if not exists user_id uuid references auth.users(id) default auth.uid();
+alter table public.rookie_ladder_predictions alter column user_id set not null;
+alter table public.rookie_ladder_predictions
+  add constraint one_prediction_per_user unique (user_id);
+drop policy if exists "anon_insert" on public.rookie_ladder_predictions;
+create policy "user_insert_own" on public.rookie_ladder_predictions
+  for insert to authenticated with check (auth.uid() = user_id);
+create policy "user_select_own" on public.rookie_ladder_predictions
+  for select to authenticated using (auth.uid() = user_id);
+grant insert, select on public.rookie_ladder_predictions to authenticated;
+```
 
 **Built so far (frontend only, no backend changes):** the feature lives in `ProspectForm.jsx`
 (NOT a separate `RookieLadder.jsx`). Tabs are now `2026 CLASS` | `ROOKIE LADDER` (old CUSTOM tab
@@ -507,10 +542,11 @@ method**. Each submission (ranking + contact) is stored in **Supabase**.
   FastAPI changes. Chosen over routing through the backend because it's simpler, lower-latency,
   and keeps the form working even when the Railway ML backend is asleep. The anon key is public
   by design; RLS is what enforces safety.
-- **Prediction format — Top 5, ordered (rank 1–5).** Matches the real NBA.com Rookie Ladder.
-- **Player pool — the 30 in `prospects_2026`.** Users pick/rank from the existing 2026 dropdown
-  players → clean, slug-keyed data (no free-text typos). Future enhancement: one optional
-  "wildcard / other" free-text slot for a riser outside the top 30.
+- **Prediction format — Top 10, ordered (rank 1–10)** (expanded from Top 5 on 2026-07-14;
+  `LADDER_SIZE` const in `ProspectForm.jsx`).
+- **Player pool — the 60 in `prospects_2026`** (expanded from 30 on 2026-07-14 by re-scraping the
+  archived Tankathon board at `/past-drafts/2026` — the live `/mock_draft` had rolled over to 2027
+  post-draft). Users pick/rank from the 2026 dropdown → clean, slug-keyed data (no free-text typos).
 - **Contact — single free-text field.** Accepts anything (email / phone / social handle / etc.).
   Optional predictor name is a possible add — decide at build time.
 
@@ -562,10 +598,9 @@ leaderboard, editing/auth. Capture as future ideas.
 Deploy the React frontend to Vercel; keep the FastAPI backend on Railway.
 - **Vercel config:** Root Directory = `frontend`, Framework preset = Vite, Build = `npm run build`,
   Output = `dist`.
-- **PRE-DEPLOY BLOCKER — hardcoded backend URL.** `App.jsx` and `Universe.jsx` hardcode
-  `http://localhost:8000` (5 spots). Replace with an env-driven base
-  (`const API = import.meta.env.VITE_API_BASE`) and set `VITE_API_BASE` to the Railway URL in
-  Vercel — otherwise prod calls localhost.
+- ~~**PRE-DEPLOY BLOCKER — hardcoded backend URL.**~~ ✅ RESOLVED 2026-07-14. All 5 spots now use
+  `API_BASE` from `frontend/src/lib/api.js` (`import.meta.env.VITE_API_BASE || 'http://localhost:8000'`).
+  At deploy: set `VITE_API_BASE` to the Railway URL in Vercel env (leave empty for local dev).
 - **Vercel env vars:** `VITE_API_BASE`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
 - **Backend CORS:** set `CORS_ORIGINS` (read in `backend/main.py`) to the Vercel domain(s) once known.
 - **Supabase:** create project + table + RLS policy before the first prod submit; mirror env vars locally.
@@ -589,11 +624,12 @@ Deploy the React frontend to Vercel; keep the FastAPI backend on Railway.
    `sprite_preview.html`, and `generate_sprites.py`. Galaxy uses `makeArcadeStarTexture` again.
    The Gemini archetype animal *name text* in the scouting panel stays — that's separate.
    Do NOT re-attempt per-animal galaxy sprites.
-9. **Rookie Ladder prediction feature** — FRONTEND BUILT 2026-07-13. Remaining: create Supabase
-   project + table/RLS, add keys to `frontend/.env.local`, restart Vite, test a real submission.
-   See "Rookie Ladder Prediction" section.
-10. **Pre-deploy: replace hardcoded `http://localhost:8000`** with `VITE_API_BASE` env in
-    `App.jsx` + `Universe.jsx` (blocks the Vercel deploy).
+9. **Rookie Ladder prediction feature** — FRONTEND DONE + WIRED 2026-07-14 (keys in, table exists,
+   10 slots, anon-auth one-per-user). Remaining: enable anon sign-ins + run migration SQL + test
+   a real submission. See "Rookie Ladder Prediction" section.
+10. ~~**Pre-deploy: replace hardcoded `http://localhost:8000`**~~ ✅ DONE 2026-07-14 —
+    `frontend/src/lib/api.js` `API_BASE`. Also fixed: WASD keydown listener in `Universe.jsx` was
+    swallowing w/a/s/d in form text inputs (now bails when target is INPUT/TEXTAREA/SELECT).
 11. **Deploy** — Railway (backend) + Vercel (frontend) + Supabase (predictions).
     See "Deployment Plan" section. Do this AFTER the Rookie Ladder feature works.
 12. **Add player_slug to ID_COLS in prepare_data.py** — for future pipeline runs

@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { supabase, supabaseReady } from '../lib/supabase'
+import { supabase, supabaseReady, ensureAnonSession } from '../lib/supabase'
 
 const POSITIONS = ['PG', 'SG', 'SF', 'PF', 'C']
 const FEET_OPTIONS = [5, 6, 7, 8]
 const ARCADE = '"Press Start 2P", monospace'
+const LADDER_SIZE = 10   // number of ranked rookie-ladder slots
 
 // Fields the /similarity endpoint accepts
 const BACKEND_FIELDS = new Set([
@@ -144,10 +145,11 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
   const [customMode, setCustomMode] = useState(false)   // swap 2026 dropdown ↔ custom stat entry
 
   // Rookie ladder state
-  const [ladder, setLadder]   = useState(['', '', '', '', ''])   // 5 slugs, rank 1–5
+  const [ladder, setLadder]   = useState(Array(LADDER_SIZE).fill(''))   // ranked slugs, rank 1–N
   const [contact, setContact] = useState('')
   const [rookieStatus, setRookieStatus] = useState('idle')       // idle | submitting | success | error
   const [rookieError,  setRookieError]  = useState('')
+  const [alreadySubmitted, setAlreadySubmitted] = useState(false) // one prediction per anon user
 
   // Custom form state
   const [open, setOpen] = useState({ combine: false, perGame: false, per36: false, advanced: false })
@@ -168,6 +170,25 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
       setSelectedSlug(prospects2026[0].slug)
     }
   }, [prospects2026.length])
+
+  // Establish an anonymous session, then check whether this user already predicted.
+  useEffect(() => {
+    if (!supabaseReady) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const user = await ensureAnonSession()
+        if (!user || cancelled) return
+        const { data, error } = await supabase
+          .from('rookie_ladder_predictions')
+          .select('id')
+          .eq('user_id', user.id)
+          .limit(1)
+        if (!cancelled && !error && data?.length > 0) setAlreadySubmitted(true)
+      } catch { /* let the submit attempt surface any real error */ }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   const selectedProspect = prospects2026.find(p => p.slug === selectedSlug) ?? null
 
@@ -238,7 +259,7 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
     playersReady &&
     contact.trim() !== '' &&
     ladder.every(Boolean) &&
-    new Set(ladder).size === 5
+    new Set(ladder).size === LADDER_SIZE
 
   const handleRookieSubmit = async (e) => {
     e.preventDefault()
@@ -254,12 +275,23 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
       const p = prospects2026.find(x => x.slug === slug)
       return { rank: i + 1, slug, name: p?.name ?? slug }
     })
+    try {
+      await ensureAnonSession()   // guarantees user_id (auth.uid()) is set on insert
+    } catch {
+      setRookieError('Could not start a session — please refresh and try again.')
+      setRookieStatus('error')
+      return
+    }
     const { error } = await supabase
       .from('rookie_ladder_predictions')
       .insert([{ contact_method: contact.trim(), predictions }])
     if (error) {
-      setRookieError(error.message)
-      setRookieStatus('error')
+      if (error.code === '23505') {   // unique violation → already predicted
+        setAlreadySubmitted(true)
+      } else {
+        setRookieError(error.message)
+        setRookieStatus('error')
+      }
     } else {
       setRookieStatus('success')
     }
@@ -565,24 +597,16 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
 
         {/* ── ROOKIE LADDER tab ──────────────────────────────────────────────── */}
         {tab === 'rookie' && (
-          rookieStatus === 'success' ? (
+          (alreadySubmitted || rookieStatus === 'success') ? (
             <div style={{ textAlign: 'center', padding: '24px 8px' }}>
               <div style={{ fontFamily: ARCADE, fontSize: '9px', color: '#ffdd00', letterSpacing: '1px', lineHeight: 2 }}>
-                PREDICTION LOGGED
+                {rookieStatus === 'success' ? 'PREDICTION LOGGED' : 'ALREADY PREDICTED'}
               </div>
               <div style={{ fontSize: '12px', color: '#7aadff', marginTop: '14px', lineHeight: 1.6 }}>
-                Thanks — your rookie ladder is saved. We&apos;ll reach out via the contact you gave.
+                {rookieStatus === 'success'
+                  ? "Thanks — your rookie ladder is saved. We'll reach out via the contact you gave."
+                  : "You've already submitted a rookie ladder from this device — one prediction per person."}
               </div>
-              <button
-                type="button"
-                onClick={() => { setLadder(['', '', '', '', '']); setContact(''); setRookieStatus('idle') }}
-                style={{
-                  marginTop: '20px', background: 'none', border: 'none', cursor: 'pointer',
-                  color: '#3a8fff', fontFamily: ARCADE, fontSize: '6px', letterSpacing: '0.5px',
-                }}
-              >
-                + SUBMIT ANOTHER
-              </button>
             </div>
           ) : (
           <form onSubmit={handleRookieSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -634,9 +658,10 @@ export default function ProspectForm({ visible, playersReady, medians, onSubmit,
             <Field label="Preferred contact method">
               <input
                 type="text"
+                className="contact-input"
                 value={contact}
                 onChange={e => setContact(e.target.value)}
-                placeholder="email, phone, Instagram, Discord"
+                placeholder="How can we contact you?"
                 style={inputStyle}
                 onFocus={e => { e.target.style.borderColor = '#3a3a5a' }}
                 onBlur={e => { e.target.style.borderColor = '#1e1e30' }}
