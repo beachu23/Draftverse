@@ -8,7 +8,7 @@ dependencies:
   - pandas=3.0.2
   - scikit-learn=1.8.0
   - numba=0.65.1
-  - scipy
+  - scipy=1.18.0
   - pip
   - pip:
       - fastapi==0.136.1

@@ -1,0 +1,20 @@
+# Frontend is deployed separately (Vercel) — keep it out of the backend image
+frontend/
+
+# VCS + Python cruft
+.git/
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Secrets come from Railway env vars, never bake them in
+.env
+*.env.local
+
+# Misc dev artifacts
+*.output
+*.bak
+_probe_*.py
